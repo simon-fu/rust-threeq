@@ -1,7 +1,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use bytes::BytesMut;
+use bytes::{BytesMut};
 use tokio::{io::{AsyncWriteExt}, net::{TcpListener, TcpStream, tcp::{ReadHalf, WriteHalf}}, select, sync::broadcast, time::Instant};
 use tracing::{debug, error, info, warn};
 
@@ -44,7 +44,18 @@ mod util{
 
             tokio::select! {
                 _ = tokio::time::sleep_until(dead_line) =>{ }
-                _ = rd.read_buf(buf) => {}
+                r = rd.read_buf(buf) => {
+                    match r{
+                        Ok(n) => {
+                            if n == 0 {
+                                return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "read disconnect"));
+                            }
+                        },
+                        Err(e) => {
+                            return Err(e);
+                        },
+                    }
+                }
             }
         }
     }
@@ -166,7 +177,7 @@ impl Session {
         }
     }
 
-    pub fn assign_conn_pkt(&mut self, pkt : &mqttbytes::v4::Connect){
+    pub fn assign_conn_pkt_v4(&mut self, pkt : &mqttbytes::v4::Connect){
         //self.conn_pkt.protocol = pkt.protocol;
         self.conn_pkt.keep_alive = pkt.keep_alive;
         self.conn_pkt.client_id = pkt.client_id.clone();
@@ -176,8 +187,26 @@ impl Session {
         //self.conn_pkt.properties = None;
 
         self.protocol = mqttbytes::Protocol::V4;
+        self.check_connect();
+    }
 
-        
+    pub fn assign_conn_pkt_v5(&mut self, pkt : &mqttbytes::v5::Connect){
+        self.conn_pkt = pkt.clone();
+        self.protocol = mqttbytes::Protocol::V5;
+        self.check_connect();
+    }
+
+    fn check_connect(&mut self){
+        if self.conn_pkt.client_id.is_empty(){
+            let duration = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap();
+            let in_nanos = duration.as_secs() * 1_000_000 + duration.subsec_nanos() as u64;
+            self.conn_pkt.client_id = format!("{}@abcdef", in_nanos); //UNIX_EPOCH
+        }
+
+        self.keep_alive_ms = self.conn_pkt.keep_alive as u64 * 1000 * 2;
+        if self.keep_alive_ms == 0 {
+            self.keep_alive_ms = 30*1000;
+        }
     }
 
     fn next_packet_id(&mut self) -> u16 {
@@ -380,12 +409,12 @@ impl Session {
             match self.protocol {
                 mqttbytes::Protocol::V4 => { 
                     let pkt = self.read_v4(&mut ibuf).await?;
-                    self.process_v4(&pkt, &mut obuf).await?;
+                    self.process_v4(pkt, &mut obuf).await?;
                  },
     
                 mqttbytes::Protocol::V5 => { 
                     let pkt = self.read_v5(&mut ibuf).await?;
-                    self.process_v5(&pkt, &mut obuf).await?;
+                    self.process_v5(pkt, &mut obuf).await?;
                 },
             }
             wr.write_all(&mut obuf).await?;
@@ -473,6 +502,7 @@ impl Session {
         
         loop{
             let rd_timeout = self.check_alive()?;
+            let rd_timeout = if rd_timeout < 5000 {rd_timeout} else { 5000 };
             let mut pkt_len  = usize::MAX;
 
             {
@@ -510,7 +540,7 @@ impl Session {
                                 pub_pkt.pkid = self.next_packet_id();
                                 let _ = pub_pkt.write(&mut obuf);
                                 
-
+                                self.last_active_time = Instant::now();
                             },
                             Err(broadcast::error::RecvError::Lagged(n)) => {
                                 info!("lagged {}", n); 
@@ -535,28 +565,23 @@ impl Session {
             } else if pkt_len > 0 && pkt_len < usize::MAX{
                 self.last_active_time = Instant::now();
                 let pkt = self.read_v4(&mut ibuf).await?;
-                self.process_v4(&pkt, &mut obuf).await?;
+                self.process_v4(pkt, &mut obuf).await?;
             }
         }
     }
 
-    async fn process_v4(&mut self, pkt : &mqttbytes::v4::Packet, obuf : &mut BytesMut) -> std::io::Result<()>{
+    async fn process_v4(&mut self, pkt : mqttbytes::v4::Packet, obuf : &mut BytesMut) -> std::io::Result<()>{
         debug!("process v4 packet {:?}", pkt);
 
         match pkt{
             mqttbytes::v4::Packet::Connect(packet) => {
                 if self.conn_pkt.client_id.is_empty(){
                     debug!("got v4 first {:?}", packet);
-                    self.assign_conn_pkt(&packet);
-                    self.keep_alive_ms = packet.keep_alive as u64 * 1000 * 2;
-                    if self.conn_pkt.client_id.is_empty(){
-                        let duration = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap();
-                        let in_nanos = duration.as_secs() * 1_000_000 + duration.subsec_nanos() as u64;
-                        self.conn_pkt.client_id = format!("{}", in_nanos); //UNIX_EPOCH
-                    }
+                    self.assign_conn_pkt_v4(&packet);
                 } else {
                     warn!("error v4 {:?}", packet);
                 }
+
                 let connack = mqttbytes::v4::ConnAck::new(mqttbytes::v4::ConnectReturnCode::Success, false);
                 let _ = connack.write(obuf);
             }
@@ -647,6 +672,7 @@ impl Session {
         
         loop{
             let rd_timeout = self.check_alive()?;
+            let rd_timeout = if rd_timeout < 5000 {rd_timeout} else { 5000 };
             let mut pkt_len  = usize::MAX;
 
             {
@@ -696,7 +722,7 @@ impl Session {
                 }
 
             }
-            
+
             if pkt_len == 0 {
                 if ibuf.len() == 0 && obuf.len() == 0{
                     debug!("v5 no data, sleep");
@@ -707,31 +733,29 @@ impl Session {
             } else if pkt_len > 0 && pkt_len < usize::MAX{
                 self.last_active_time = Instant::now();
                 let pkt = self.read_v5(&mut ibuf).await?;
-                self.process_v5(&pkt, &mut obuf).await?;
+                self.process_v5(pkt, &mut obuf).await?;
             }
         }
         // return Ok(());
     }
 
-    async fn process_v5(&mut self, pkt : &mqttbytes::v5::Packet, obuf : &mut BytesMut) -> std::io::Result<()>{
+    async fn process_v5(&mut self, pkt : mqttbytes::v5::Packet, obuf : &mut BytesMut) -> std::io::Result<()>{
         debug!("process v5 packet {:?}", pkt);
 
         match pkt{
             mqttbytes::v5::Packet::Connect(packet) => {
                 if self.conn_pkt.client_id.is_empty(){
                     debug!("got v5 first {:?}", packet);
-                    self.conn_pkt = packet.clone();
-                    self.keep_alive_ms = packet.keep_alive as u64 * 1000 * 2;
-                    if self.conn_pkt.client_id.is_empty(){
-                        let duration = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap();
-                        let in_nanos = duration.as_secs() * 1_000_000 + duration.subsec_nanos() as u64;
-                        self.conn_pkt.client_id = format!("{}", in_nanos); //UNIX_EPOCH
-                    }
+                    self.assign_conn_pkt_v5(&packet);
                 } else {
                     warn!("error v5 {:?}", packet);
                 }
+
                 let mut connack = mqttbytes::v5::ConnAck::new(mqttbytes::v5::ConnectReturnCode::Success, false);
                 connack.properties = Some(mqttbytes::v5::ConnAckProperties::new());
+                if packet.client_id.is_empty() {
+                    connack.properties.as_mut().unwrap().assigned_client_identifier = Some(self.conn_pkt.client_id.clone());
+                }
                 let _ = connack.write(obuf);
             }
 
