@@ -1,10 +1,25 @@
 
-use std::{io::Write, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use bytes::{BytesMut};
 use tokio::{io::{AsyncWriteExt}, net::{TcpListener, TcpStream, tcp::{ReadHalf, WriteHalf}}, select, sync::broadcast, time::Instant};
 use tracing::{debug, error, info, warn};
 
+// refer https://doc.rust-lang.org/reference/conditional-compilation.html?highlight=target_os#target_os
+// refer https://doc.rust-lang.org/rust-by-example/attribute/cfg.html
+// refer https://cloud.tencent.com/developer/article/1138651
+fn call_malloc_trim() {
+    #[cfg(target_os = "linux")]{
+        extern "C" {
+            fn malloc_trim(pad: usize) -> i32;
+        }
+    
+        let freed = unsafe { 
+            malloc_trim(128*1024)
+        };
+        info!("malloc_trim freed {}", freed);
+    }
+}
 
 
 
@@ -873,84 +888,15 @@ async fn run_server() -> core::result::Result<(), Box<dyn std::error::Error>>{
                 } 
             }
 
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) =>{
+                call_malloc_trim();
+            }
+
         };
     }
 }
 
-fn wait_console_enter(msg : &str){
-    print!("{}", msg);
-    let _ = std::io::stdout().flush();
 
-    let mut s=String::new();
-    std::io::stdin().read_line(&mut s).expect("Did not enter a correct string");
-    if let Some('\n')=s.chars().next_back() {
-        s.pop();
-    }
-    if let Some('\r')=s.chars().next_back() {
-        s.pop();
-    }
-}
-
-fn burn_memory_directly(packet_size : usize, max_packets : usize, ){
-    let mut v : Vec<BytesMut> = Vec::new();
-    for _i in 0..max_packets {
-        let mut buf = BytesMut::with_capacity(packet_size);
-        let pkt = mqttbytes::v4::Connect::new("clientid-0001");
-        let _ = pkt.write(&mut buf);
-        //buf.put_slice(b"123");
-        v.push(buf);
-    }
-    let msg = format!("  alloc bytes {}x{}={}, press Enter to continue", packet_size, max_packets, packet_size*max_packets);
-    wait_console_enter(&msg);
-}
-
-async fn burn_memory_with_tasks(packet_size : usize, max_packets : usize, ){
-    // let mut v : Vec<tokio::task::JoinHandle<()>> = Vec::new();
-    let (tx, _rx) = broadcast::channel(16);
-    for _i in 0..max_packets {
-        let mut rx0 = tx.subscribe();
-        let _h = tokio::spawn(async move{
-            let mut buf = BytesMut::with_capacity(packet_size);
-            let pkt = mqttbytes::v4::Connect::new("clientid-0001");
-            let _ = pkt.write(&mut buf);
-            let _ = rx0.recv().await;
-        });
-        //v.push(h);
-    }
-    
-    let msg = format!("  spawned tasks {}, press Enter to continue", max_packets);
-    wait_console_enter(&msg);
-
-    let _ = tx.send(1);
-
-    // for h in v {
-    //     let _ = h.await;
-    // }
-}
-
-async fn bench_memory(){
-    let packet_size = 1000 as usize;
-    let max_packets = 1000*1000 as usize;
-    let niter = 1 as usize;
-    let nbytes = packet_size * max_packets;
-    
-    println!("aaa plan alloc, pkt_size {}, npkt {},  bytes {}M, iter {} times", packet_size, max_packets, nbytes/1000/1000, niter);
-    wait_console_enter("aaa ready, press Enter to continue");
-    
-    for _ in 0..niter{
-        burn_memory_directly(packet_size, max_packets);
-    }
-    wait_console_enter("aaa burn_memory_directly done, press Enter to continue");
-
-    for _ in 0..niter{
-        burn_memory_with_tasks(packet_size, max_packets).await;
-    }
-    wait_console_enter("aaa burn_memory_with_tasks done, press Enter to continue");
-
-    //wait_console_enter("aaa alloc done, press Enter to continue");
-
-    std::process::exit(0);
-}
 
 // #[ntex::main]
 #[tokio::main]
@@ -969,9 +915,9 @@ async fn main() {
     .with_env_filter(env_filter)
     .init();
 
-    bench_memory().await;
 
     let _ = run_server().await;
 
 }
+
 
