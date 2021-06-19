@@ -488,8 +488,8 @@ impl Session {
                     match r{
                         Ok(_) => {
                             match self.protocol {
-                                mqttbytes::Protocol::V4 => { self.run_v4(&mut rd, &mut wr).await?; },
-                                mqttbytes::Protocol::V5 => { self.run_v5(&mut rd, &mut wr).await?; },
+                                mqttbytes::Protocol::V4 => { self.run_v4(&mut rd, &mut wr, None).await?; },
+                                mqttbytes::Protocol::V5 => { self.run_v5(&mut rd, &mut wr, None).await?; },
                             }
                         },
                         Err(e) => {
@@ -497,6 +497,24 @@ impl Session {
                         },
                     }
                     
+                }
+
+                r = self.rx.recv() =>{
+                    match r{
+                        Ok(d) => {
+                            match self.protocol {
+                                mqttbytes::Protocol::V4 => { self.run_v4(&mut rd, &mut wr, Some(d)).await?; },
+                                mqttbytes::Protocol::V5 => { self.run_v5(&mut rd, &mut wr, Some(d)).await?; },
+                            }
+                        },
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            info!("lagged {}", n); 
+                            //while let Ok(d) = self.rx.try_recv() { }
+                        },
+                        Err(_) => {
+
+                        }
+                    }
                 }
 
                 _ = tokio::time::sleep_until(dead_line) => {
@@ -530,9 +548,41 @@ impl Session {
     //     return Ok(());
     // }
 
-    pub async fn run_v4<'a>(&mut self, rd : &mut ReadHalf<'a>, wr : &mut WriteHalf<'a>) -> std::io::Result<()> {
+    fn serialize_pkt_v4(&mut self, d : Arc<hub::PubData>, obuf : &mut BytesMut){
+        let mut pub_pkt = match &*d{
+            hub::PubData::V4(pkt) => {
+                mqttbytes::v4::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
+            },
+            hub::PubData::V5(pkt) => {
+                mqttbytes::v4::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
+            },
+        };
+        pub_pkt.pkid = self.next_packet_id();
+        let _ = pub_pkt.write(obuf);        
+        
+        self.last_active_time = Instant::now();
+    }
+
+    fn serialize_pkt_v5(&mut self, d : Arc<hub::PubData>, obuf : &mut BytesMut){
+        let mut pub_pkt = match &*d{
+            hub::PubData::V4(pkt) => {
+                mqttbytes::v5::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
+            },
+            hub::PubData::V5(pkt) => {
+                mqttbytes::v5::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
+            },
+        };
+        pub_pkt.pkid = self.next_packet_id();
+        let _ = pub_pkt.write( obuf);
+    }
+
+    pub async fn run_v4<'a>(&mut self, rd : &mut ReadHalf<'a>, wr : &mut WriteHalf<'a>, pubd : Option<Arc<hub::PubData>>) -> std::io::Result<()> {
         let mut ibuf = BytesMut::with_capacity(1);
         let mut obuf = BytesMut::new();
+
+        if !pubd.is_none() {
+            self.serialize_pkt_v4(pubd.unwrap(), &mut obuf);
+        }
         
         loop{
             let rd_timeout = self.check_alive()?;
@@ -563,18 +613,7 @@ impl Session {
                     r = self.rx.recv() =>{
                         match r{
                             Ok(d) => {
-                                let mut pub_pkt = match &*d{
-                                    hub::PubData::V4(pkt) => {
-                                        mqttbytes::v4::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
-                                    },
-                                    hub::PubData::V5(pkt) => {
-                                        mqttbytes::v4::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
-                                    },
-                                };
-                                pub_pkt.pkid = self.next_packet_id();
-                                let _ = pub_pkt.write(&mut obuf);
-                                
-                                self.last_active_time = Instant::now();
+                                self.serialize_pkt_v4(d, &mut obuf);
                             },
                             Err(broadcast::error::RecvError::Lagged(n)) => {
                                 info!("lagged {}", n); 
@@ -700,10 +739,14 @@ impl Session {
         return Ok(());
     }
 
-    pub async fn run_v5<'a>( &mut self, rd : &mut ReadHalf<'a>, wr : &mut WriteHalf<'a> ) -> std::io::Result<()> {
+    pub async fn run_v5<'a>( &mut self, rd : &mut ReadHalf<'a>, wr : &mut WriteHalf<'a>, pubd : Option<Arc<hub::PubData>> ) -> std::io::Result<()> {
         let mut ibuf = BytesMut::with_capacity(1);
         let mut obuf = BytesMut::new();
         
+        if !pubd.is_none() {
+            self.serialize_pkt_v5(pubd.unwrap(), &mut obuf);
+        }
+
         loop{
             let rd_timeout = self.check_alive()?;
             let rd_timeout = if rd_timeout < 5000 {rd_timeout} else { 5000 };
@@ -733,16 +776,7 @@ impl Session {
                     r = self.rx.recv() =>{
                         match r{
                             Ok(d) => {
-                                let mut pub_pkt = match &*d{
-                                    hub::PubData::V4(pkt) => {
-                                        mqttbytes::v5::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
-                                    },
-                                    hub::PubData::V5(pkt) => {
-                                        mqttbytes::v5::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
-                                    },
-                                };
-                                pub_pkt.pkid = self.next_packet_id();
-                                let _ = pub_pkt.write(&mut obuf);
+                                self.serialize_pkt_v5(d, &mut obuf);
                             },
                             Err(broadcast::error::RecvError::Lagged(n)) => {
                                 info!("lagged {}", n); 
