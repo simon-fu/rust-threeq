@@ -4,12 +4,14 @@ use std::{sync::Arc, time::Duration};
 use bytes::{BytesMut};
 use tokio::{io::{AsyncWriteExt}, net::{TcpListener, TcpStream, tcp::{ReadHalf, WriteHalf}}, select, sync::broadcast, time::Instant};
 use tracing::{debug, error, info, warn};
+use clap::{Clap};
 
 // refer https://doc.rust-lang.org/reference/conditional-compilation.html?highlight=target_os#target_os
 // refer https://doc.rust-lang.org/rust-by-example/attribute/cfg.html
 // refer https://cloud.tencent.com/developer/article/1138651
-fn call_malloc_trim() {
-    #[cfg(target_os = "linux")]{
+fn call_malloc_trim() -> bool{
+    #[cfg(target_os = "linux")]
+    {
         extern "C" {
             fn malloc_trim(pad: usize) -> i32;
         }
@@ -17,8 +19,25 @@ fn call_malloc_trim() {
         let freed = unsafe { 
             malloc_trim(128*1024)
         };
-        info!("malloc_trim freed {}", freed);
+        return if freed == 0 {false} else {true};
+        //debug!("malloc_trim freed {}", freed);
     }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+// refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
+#[derive(Clap, Debug, Default)]
+#[clap(name="threeq broker", author, about, version)]
+struct Config{
+    #[clap(short='l', long="tcp-listen", default_value = "0.0.0.0:1883", long_about="tcp listen address.")]
+    tcp_listen_addr: String, 
+
+    #[clap(short='g', long="enable_gc", long_about="enable memory garbage collection")]
+    enable_gc: bool,
 }
 
 
@@ -857,10 +876,9 @@ impl Session {
 }
 
 
-async fn run_server() -> core::result::Result<(), Box<dyn std::error::Error>>{
-    let address = "0.0.0.0:1883";
-    let listener = TcpListener::bind(address).await?;
-    info!("mqtt tcp server listening on {}", address);
+async fn run_server(cfg:&Config) -> core::result::Result<(), Box<dyn std::error::Error>>{
+    let listener = TcpListener::bind(&cfg.tcp_listen_addr).await?;
+    info!("mqtt tcp broker listening on {}", cfg.tcp_listen_addr);
 
     let hub = Arc::new(hub::Hub::default());
     let mut uid = 0;
@@ -888,8 +906,9 @@ async fn run_server() -> core::result::Result<(), Box<dyn std::error::Error>>{
                 } 
             }
 
-            _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) =>{
-                call_malloc_trim();
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)), if cfg.enable_gc =>{
+                let success = call_malloc_trim();
+                info!("gc result {}", success);
             }
 
         };
@@ -915,8 +934,10 @@ async fn main() {
     .with_env_filter(env_filter)
     .init();
 
-
-    let _ = run_server().await;
+    let cfg = Config::parse();
+    info!("cfg={:?}", cfg);
+    
+    let _ = run_server(&cfg).await;
 
 }
 
