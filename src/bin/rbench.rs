@@ -20,4 +20,12 @@ async fn main() {
     use rust_threeq::tq3;
     let d = tq3::codec::Decoder::new();
     info!("d = {:?}", d);
+
+    // use ntex_mqtt::v3::codec::Connect;
+    use ntex_mqtt::v5::codec::Publish;
+    use tq3::tt::Connect;
+    let connect = Connect::new("");
+
+    let t : tq3::tt::v4::TTT;
+
 }
