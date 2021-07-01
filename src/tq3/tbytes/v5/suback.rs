@@ -180,7 +180,7 @@ pub enum SubscribeReasonCode {
 }
 
 impl TryFrom<u8> for SubscribeReasonCode {
-    type Error = crate::Error;
+    type Error = super::Error;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         let v = match value {
@@ -196,7 +196,7 @@ impl TryFrom<u8> for SubscribeReasonCode {
             158 => SubscribeReasonCode::SharedSubscriptionsNotSupported,
             161 => SubscribeReasonCode::SubscriptionIdNotSupported,
             162 => SubscribeReasonCode::WildcardSubscriptionsNotSupported,
-            v => return Err(crate::Error::InvalidSubscribeReasonCode(v)),
+            v => return Err(super::Error::InvalidSubscribeReasonCode(v)),
         };
 
         Ok(v)

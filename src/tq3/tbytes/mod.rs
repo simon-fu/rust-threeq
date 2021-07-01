@@ -168,7 +168,7 @@ pub fn check(stream: Iter<u8>, max_packet_size: usize) -> Result<FixedHeader, Er
 }
 
 /// Parses fixed header
-fn parse_fixed_header(mut stream: Iter<u8>) -> Result<FixedHeader, Error> {
+pub fn parse_fixed_header(mut stream: Iter<u8>) -> Result<FixedHeader, Error> {
     // At least 2 bytes are necessary to frame a packet
     let stream_len = stream.len();
     if stream_len < 2 {

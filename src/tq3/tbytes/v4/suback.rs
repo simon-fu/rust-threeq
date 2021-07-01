@@ -65,7 +65,7 @@ pub enum SubscribeReasonCode {
 }
 
 impl TryFrom<u8> for SubscribeReasonCode {
-    type Error = crate::Error;
+    type Error = super::Error;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         let v = match value {
@@ -73,7 +73,7 @@ impl TryFrom<u8> for SubscribeReasonCode {
             1 => SubscribeReasonCode::Success(QoS::AtLeastOnce),
             2 => SubscribeReasonCode::Success(QoS::ExactlyOnce),
             128 => SubscribeReasonCode::Failure,
-            v => return Err(crate::Error::InvalidSubscribeReasonCode(v)),
+            v => return Err(super::Error::InvalidSubscribeReasonCode(v)),
         };
 
         Ok(v)

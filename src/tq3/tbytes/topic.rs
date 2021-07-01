@@ -1,3 +1,4 @@
+extern crate alloc;
 use alloc::vec::Vec;
 
 /// Checks if a topic or topic filter has wildcards

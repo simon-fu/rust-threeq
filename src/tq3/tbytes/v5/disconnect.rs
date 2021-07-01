@@ -2,7 +2,9 @@ use std::convert::{TryFrom, TryInto};
 
 use bytes::{BufMut, BytesMut};
 
-use crate::*;
+//use crate::*;
+use super::*;
+use super::super::*;
 
 use super::{property, PropertyType};
 
@@ -340,7 +342,8 @@ impl Disconnect {
 mod test {
     use bytes::BytesMut;
 
-    use crate::parse_fixed_header;
+    // use crate::parse_fixed_header;
+    use super::parse_fixed_header;
 
     use super::{Disconnect, DisconnectProperties, DisconnectReasonCode};
 
