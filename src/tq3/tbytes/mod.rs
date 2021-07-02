@@ -43,7 +43,7 @@ pub enum Error {
 
 /// MQTT packet type
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, num_enum::TryFromPrimitive)]
 pub enum PacketType {
     Connect = 1,
     ConnAck,
@@ -110,6 +110,10 @@ impl FixedHeader {
             fixed_header_len: remaining_len_len + 1,
             remaining_len,
         }
+    }
+
+    pub fn get_type_byte(&self)->u8{
+        self.byte1 >> 4
     }
 
     pub fn packet_type(&self) -> Result<PacketType, Error> {

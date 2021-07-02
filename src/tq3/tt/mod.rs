@@ -1,38 +1,112 @@
-use bytes::Bytes;
+
 use std::slice::Iter;
+use super::tbytes;
 
-pub type FixedHeader = mqttbytes::FixedHeader;
+pub type Protocol = tbytes::Protocol;
 
-pub type Connect = mqttbytes::v5::Connect;
+pub type FixedHeader = tbytes::FixedHeader;
 
-pub type Publish = mqttbytes::v5::Publish;
+pub type Packet = tbytes::v5::Packet;
 
-pub type Packet = mqttbytes::v5::Packet;
+pub type PacketType = tbytes::PacketType;
 
-pub type PacketType = mqttbytes::PacketType;
+pub type Error = tbytes::Error;
 
-pub type Error = mqttbytes::Error;
 
-pub fn decode_type(byte1: u8)-> Result<PacketType, Error>{
-    let num = byte1 >> 4;
-    match num {
-        1 => Ok(PacketType::Connect),
-        2 => Ok(PacketType::ConnAck),
-        3 => Ok(PacketType::Publish),
-        4 => Ok(PacketType::PubAck),
-        5 => Ok(PacketType::PubRec),
-        6 => Ok(PacketType::PubRel),
-        7 => Ok(PacketType::PubComp),
-        8 => Ok(PacketType::Subscribe),
-        9 => Ok(PacketType::SubAck),
-        10 => Ok(PacketType::Unsubscribe),
-        11 => Ok(PacketType::UnsubAck),
-        12 => Ok(PacketType::PingReq),
-        13 => Ok(PacketType::PingResp),
-        14 => Ok(PacketType::Disconnect),
-        _ => Err(Error::InvalidPacketType(num)),
-    }
-}
+pub type Connect = tbytes::v5::Connect;
+
+pub type ConnAck = tbytes::v5::ConnAck;
+
+pub type Publish = tbytes::v5::Publish;
+
+pub type PubAck = tbytes::v5::PubAck;
+
+pub type PubRec = tbytes::v5::PubRec;
+
+pub type PubRel = tbytes::v5::PubRel;
+
+pub type PubComp = tbytes::v5::PubComp;
+
+pub type Subscribe = tbytes::v5::Subscribe;
+
+pub type SubAck = tbytes::v5::SubAck;
+
+pub type Unsubscribe = tbytes::v5::Unsubscribe;
+
+pub type UnsubAck = tbytes::v5::UnsubAck;
+
+pub type PingReq = tbytes::v5::PingReq;
+
+pub type PingResp = tbytes::v5::PingResp;
+
+pub type Disconnect = tbytes::v5::Disconnect;
+
+pub type QoS = tbytes::QoS;
+
+pub type ConnectReturnCode = tbytes::v5::ConnectReturnCode;
+
+pub type ConnAckProperties = tbytes::v5::ConnAckProperties;
+
+pub type SubscribeReasonCode = tbytes::v5::SubscribeReasonCode;
+
+// pub trait Handlers<T> {
+//     fn handle_connect(&self, pkt : Connect) -> T;
+//     fn handle_publish(&self, pkt : Connect) -> T;
+// }
+
+// pub fn decode_n_dispatch<T>(fixed_header: FixedHeader, bytes : Bytes, handlers: &impl Handlers<T>) -> Result<T, Error>{
+//     let pkt = Connect::new("");
+//     return Ok(handlers.handle_connect(pkt));
+// }
+
+
+
+
+
+// pub fn decode_protocol_level(buf : & BytesMut) -> std::io::Result<tbytes::Protocol>{
+//     // Connect Packet
+//     //      byte 0: packet-type:4bit, reserved:4bit
+//     //      byte 1: Remaining Length
+//     //      byte 2~3: 4
+//     //      byte 4~7: 'MQTT'
+//     //      byte 8: level
+//     if buf.len() < 9 {
+//         let error = format!("parsing protocol level: too short {}", buf.len());
+//             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error));
+//     }
+
+//     let protocol_level = buf[8];
+//     match protocol_level {
+//         4 => return Ok(tbytes::Protocol::V4),
+//         5 => return Ok(tbytes::Protocol::V5),
+//         num => {
+//             let error = format!("unknown mqtt protocol level {}", num);
+//             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error));
+//         },
+//     };
+// }
+
+
+// pub fn decode_type(byte1: u8)-> Result<PacketType, Error>{
+//     let num = byte1 >> 4;
+//     match num {
+//         1 => Ok(PacketType::Connect),
+//         2 => Ok(PacketType::ConnAck),
+//         3 => Ok(PacketType::Publish),
+//         4 => Ok(PacketType::PubAck),
+//         5 => Ok(PacketType::PubRec),
+//         6 => Ok(PacketType::PubRel),
+//         7 => Ok(PacketType::PubComp),
+//         8 => Ok(PacketType::Subscribe),
+//         9 => Ok(PacketType::SubAck),
+//         10 => Ok(PacketType::Unsubscribe),
+//         11 => Ok(PacketType::UnsubAck),
+//         12 => Ok(PacketType::PingReq),
+//         13 => Ok(PacketType::PingResp),
+//         14 => Ok(PacketType::Disconnect),
+//         _ => Err(Error::InvalidPacketType(num)),
+//     }
+// }
 
 pub fn decode_len_len(stream: Iter<u8>) -> Result<(usize, usize), Error> {
     let mut len: usize = 0;
@@ -74,7 +148,7 @@ pub fn decode_len_len(stream: Iter<u8>) -> Result<(usize, usize), Error> {
 }
 
 
-pub fn check(mut stream: Iter<u8>, max_packet_size: usize) -> Result<(PacketType, FixedHeader), Error> {
+pub fn check(mut stream: Iter<u8>, max_packet_size: usize) -> Result<FixedHeader, Error> {
     // Create fixed header if there are enough bytes in the stream
     // to frame full packet
     let stream_len = stream.len();
@@ -86,10 +160,6 @@ pub fn check(mut stream: Iter<u8>, max_packet_size: usize) -> Result<(PacketType
     let byte1 = stream.next().unwrap();
     let (len_len, len) = decode_len_len(stream)?;
 
-    let packet_type = decode_type(*byte1)?;
-
-    let fixed_header = FixedHeader::new(*byte1, len_len, len);
-
     // Don't let rogue connections attack with huge payloads.
     // Disconnect them before reading all that data
     if len > max_packet_size {
@@ -98,42 +168,19 @@ pub fn check(mut stream: Iter<u8>, max_packet_size: usize) -> Result<(PacketType
 
     // If the current call fails due to insufficient bytes in the stream,
     // after calculating remaining length, we extend the stream
-    let frame_length = fixed_header.frame_length();
+    let frame_length = len_len + 1 + len;
     if stream_len < frame_length {
         return Err(Error::InsufficientBytes(frame_length - stream_len));
     }
 
-    Ok((packet_type, fixed_header))
+    // let packet_type = decode_type(*byte1)?;
+
+    Ok(FixedHeader::new(*byte1, len_len, len))
 }
 
 
-pub trait Decode<T> {
-    fn decode(fix_header : FixedHeader, src: &mut Bytes) -> Result<T, Error>;
-}
-
-trait Printable {
-    fn stringify(&self) -> String;
-}
-
-pub struct Dummy;
 
 
-fn decode_dummy(fix_header : FixedHeader, src: &mut Bytes) -> Result<Dummy, Error>{
-    return Err(Error::InvalidPacketType(99));
-}
-
-type Decoder<T> = fn (fix_header : FixedHeader, packet: Bytes) -> Result<T, Error>;
-
-pub struct Decoders {
-    pub connect : Decoder<Connect>,
-
-    pub publish : Decoder<Publish>,
-
-}
-
-
-pub type PacketDecoder = fn(stream: &mut Bytes, max_size: usize) -> Result<Packet, Error>;
-
-pub mod v4;
+// pub mod v4;
 
 // pub mod v5;

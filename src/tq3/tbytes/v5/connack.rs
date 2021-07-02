@@ -48,20 +48,27 @@ impl ConnAck {
         }
     }
 
-    fn len(&self) -> usize {
+    fn len(&self, protocol:Protocol) -> usize {
         let mut len = 1  // session present
                         + 1; // code
 
-        if let Some(properties) = &self.properties {
-            let properties_len = properties.len();
-            let properties_len_len = len_len(properties_len);
-            len += properties_len_len + properties_len;
+        match protocol {
+            Protocol::V4 => {},
+            Protocol::V5 => {
+                if let Some(properties) = &self.properties {
+                    let properties_len = properties.len();
+                    let properties_len_len = len_len(properties_len);
+                    len += properties_len_len + properties_len;
+                } else {
+                    len += 1;
+                }
+            },
         }
 
         len
     }
 
-    pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
         let variable_header_index = fixed_header.fixed_header_len;
         bytes.advance(variable_header_index);
 
@@ -73,26 +80,44 @@ impl ConnAck {
         let connack = ConnAck {
             session_present,
             code,
-            properties: ConnAckProperties::extract(&mut bytes)?,
+            properties: match protocol {
+                Protocol::V4 => None,
+                Protocol::V5 => ConnAckProperties::extract(&mut bytes)?,
+            },
         };
 
         Ok(connack)
     }
 
-    pub fn write(&self, buffer: &mut BytesMut) -> Result<usize, Error> {
-        let len = self.len();
+    // pub fn read(fixed_header: FixedHeader, bytes: Bytes) -> Result<Self, Error> {
+    //     Self::decode(Protocol::V5, fixed_header, bytes)
+    // }
+
+    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
+        let len = self.len(protocol);  // TODO: aaa 根据protocol判断长度
         buffer.put_u8(0x20);
 
         let count = write_remaining_length(buffer, len)?;
         buffer.put_u8(self.session_present as u8);
         buffer.put_u8(self.code as u8);
 
-        if let Some(properties) = &self.properties {
-            properties.write(buffer)?;
+        match protocol {
+            Protocol::V4 => {},
+            Protocol::V5 => {
+                if let Some(properties) = &self.properties {
+                    properties.write(buffer)?;
+                } else {
+                    write_remaining_length(buffer, 0)?;
+                }
+            },
         }
 
         Ok(1 + count + len)
     }
+
+    // pub fn write(&self, buffer: &mut BytesMut) -> Result<usize, Error> {
+    //     self.encode(Protocol::V5, buffer)
+    // }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -541,7 +566,8 @@ mod test {
 
         let fixed_header = parse_fixed_header(stream.iter()).unwrap();
         let connack_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let connack = ConnAck::read(fixed_header, connack_bytes).unwrap();
+        //let connack = ConnAck::read(fixed_header, connack_bytes).unwrap();
+        let connack = ConnAck::decode(Protocol::V5, fixed_header, connack_bytes).unwrap();
 
         assert_eq!(connack, sample());
     }
@@ -550,7 +576,8 @@ mod test {
     fn connack_encoding_works() {
         let connack = sample();
         let mut buf = BytesMut::new();
-        connack.write(&mut buf).unwrap();
+        //connack.write(&mut buf).unwrap();
+        connack.encode(Protocol::V5, &mut buf).unwrap();
         assert_eq!(&buf[..], sample_bytes());
     }
 }

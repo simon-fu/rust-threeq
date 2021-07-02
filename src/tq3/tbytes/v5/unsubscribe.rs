@@ -22,30 +22,36 @@ impl Unsubscribe {
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub fn len(&self, protocol:Protocol) -> usize {
         // Packet id + length of filters (unlike subscribe, this just a string.
         // Hence 2 is prefixed for len per filter)
         let mut len = 2 + self.filters.iter().fold(0, |s, t| 2 + s + t.len());
 
-        if let Some(properties) = &self.properties {
-            let properties_len = properties.len();
-            let properties_len_len = len_len(properties_len);
-            len += properties_len_len + properties_len;
-        } else {
-            // just 1 byte representing 0 len
-            len += 1;
+        if protocol == Protocol::V5 {
+            if let Some(properties) = &self.properties {
+                let properties_len = properties.len();
+                let properties_len_len = len_len(properties_len);
+                len += properties_len_len + properties_len;
+            } else {
+                // just 1 byte representing 0 len
+                len += 1;
+            }
         }
 
         len
     }
 
-    pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
         let variable_header_index = fixed_header.fixed_header_len;
         bytes.advance(variable_header_index);
 
         let pkid = read_u16(&mut bytes)?;
-        dbg!(pkid);
-        let properties = UnsubscribeProperties::extract(&mut bytes)?;
+        //dbg!(pkid);
+        let properties = if protocol == Protocol::V4 {
+            None
+        } else {
+            UnsubscribeProperties::extract(&mut bytes)?
+        };
 
         let mut filters = Vec::with_capacity(1);
         while bytes.has_remaining() {
@@ -61,22 +67,24 @@ impl Unsubscribe {
         Ok(unsubscribe)
     }
 
-    pub fn write(&self, buffer: &mut BytesMut) -> Result<usize, Error> {
+    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         buffer.put_u8(0xA2);
 
         // write remaining length
-        let remaining_len = self.len();
+        let remaining_len = self.len(protocol);
         let remaining_len_bytes = write_remaining_length(buffer, remaining_len)?;
 
         // write packet id
         buffer.put_u16(self.pkid);
 
-        match &self.properties {
-            Some(properties) => properties.write(buffer)?,
-            None => {
-                write_remaining_length(buffer, 0)?;
-            }
-        };
+        if protocol == Protocol::V5 {
+            match &self.properties {
+                Some(properties) => properties.write(buffer)?,
+                None => {
+                    write_remaining_length(buffer, 0)?;
+                }
+            };
+        }
 
         // write filters
         for filter in self.filters.iter() {
@@ -188,7 +196,7 @@ mod test {
 
         let fixed_header = parse_fixed_header(stream.iter()).unwrap();
         let unsubscribe_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let unsubscribe = Unsubscribe::read(fixed_header, unsubscribe_bytes).unwrap();
+        let unsubscribe = Unsubscribe::decode(Protocol::V5, fixed_header, unsubscribe_bytes).unwrap();
         assert_eq!(unsubscribe, sample());
     }
 
@@ -196,7 +204,7 @@ mod test {
     fn subscribe_encoding_works() {
         let publish = sample();
         let mut buf = BytesMut::new();
-        publish.write(&mut buf).unwrap();
+        publish.encode(Protocol::V5,&mut buf).unwrap();
 
         println!("{:X?}", buf);
         println!("{:#04X?}", &buf[..]);
@@ -226,7 +234,7 @@ mod test {
 
         let fixed_header = parse_fixed_header(stream.iter()).unwrap();
         let subscribe_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let subscribe = Unsubscribe::read(fixed_header, subscribe_bytes).unwrap();
+        let subscribe = Unsubscribe::decode(Protocol::V5, fixed_header, subscribe_bytes).unwrap();
         assert_eq!(subscribe, sample2());
     }
 
@@ -234,7 +242,7 @@ mod test {
     fn subscribe2_encoding_works() {
         let publish = sample2();
         let mut buf = BytesMut::new();
-        publish.write(&mut buf).unwrap();
+        publish.encode(Protocol::V5,&mut buf).unwrap();
 
         // println!("{:X?}", buf);
         // println!("{:#04X?}", &buf[..]);

@@ -26,3 +26,4 @@ ntex-mqtt = "0.6.7"
 mqttbytes="0" 
 futures="0"
 pretty_assertions = "0.6.1" # for tbytes
+num_enum = "0.5.1"

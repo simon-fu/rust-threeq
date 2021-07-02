@@ -41,29 +41,38 @@ impl Publish {
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub fn len(&self, protocol:Protocol) -> usize {
         let mut len = 2 + self.topic.len();
         if self.qos != QoS::AtMostOnce && self.pkid != 0 {
             len += 2;
         }
 
-        match &self.properties {
-            Some(properties) => {
-                let properties_len = properties.len();
-                let properties_len_len = len_len(properties_len);
-                len += properties_len_len + properties_len;
-            }
-            None => {
-                // just 1 byte representing 0 len
-                len += 1;
-            }
+        match protocol {
+            Protocol::V4 => {},
+            Protocol::V5 => {
+                match &self.properties {
+                    Some(properties) => {
+                        let properties_len = properties.len();
+                        let properties_len_len = len_len(properties_len);
+                        len += properties_len_len + properties_len;
+                    }
+                    None => {
+                        // just 1 byte representing 0 len
+                        len += 1;
+                    }
+                }
+            },
         }
 
         len += self.payload.len();
         len
     }
 
-    pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    // pub fn read(fixed_header: FixedHeader, bytes: Bytes) -> Result<Self, Error> {
+    //     return Self::decode(Protocol::V5, fixed_header, bytes);
+    // }
+
+    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
         let qos = qos((fixed_header.byte1 & 0b0110) >> 1)?;
         let dup = (fixed_header.byte1 & 0b1000) != 0;
         let retain = (fixed_header.byte1 & 0b0001) != 0;
@@ -88,15 +97,22 @@ impl Publish {
             qos,
             pkid,
             topic,
-            properties: PublishProperties::extract(&mut bytes)?,
+            properties: match protocol {
+                Protocol::V4 => None,
+                Protocol::V5 => PublishProperties::extract(&mut bytes)?,
+            },
             payload: bytes,
         };
 
         Ok(publish)
     }
 
-    pub fn write(&self, buffer: &mut BytesMut) -> Result<usize, Error> {
-        let len = self.len();
+    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
+        self.encode_with_pktid(protocol, self.pkid, buffer)
+    }
+
+    pub fn encode_with_pktid(&self, protocol:Protocol, pktid:u16, buffer: &mut BytesMut) -> Result<usize, Error> {
+        let len = self.len(protocol);
 
         let dup = self.dup as u8;
         let qos = self.qos as u8;
@@ -107,26 +123,34 @@ impl Publish {
         write_mqtt_string(buffer, self.topic.as_str());
 
         if self.qos != QoS::AtMostOnce {
-            let pkid = self.pkid;
-            if pkid == 0 {
+            if pktid == 0 {
                 return Err(Error::PacketIdZero);
             }
 
-            buffer.put_u16(pkid);
+            buffer.put_u16(pktid);
         }
 
-        match &self.properties {
-            Some(properties) => properties.write(buffer)?,
-            None => {
-                write_remaining_length(buffer, 0)?;
-            }
-        };
+        match protocol {
+            Protocol::V4 => {},
+            Protocol::V5 => {
+                match &self.properties {
+                    Some(properties) => properties.write(buffer)?,
+                    None => {
+                        write_remaining_length(buffer, 0)?;
+                    }
+                };
+            },
+        }
 
         buffer.extend_from_slice(&self.payload);
 
         // TODO: Returned length is wrong in other packets. Fix it
         Ok(1 + count + len)
     }
+
+    // pub fn write(&self, buffer: &mut BytesMut) -> Result<usize, Error> {
+    //     self.encode(Protocol::V5, buffer)
+    // }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -380,7 +404,8 @@ mod test {
 
         let fixed_header = parse_fixed_header(stream.iter()).unwrap();
         let publish_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let publish = Publish::read(fixed_header, publish_bytes).unwrap();
+        // let publish = Publish::read(fixed_header, publish_bytes).unwrap();
+        let publish = Publish::decode(Protocol::V5, fixed_header, publish_bytes).unwrap();
         assert_eq!(publish, sample_v5());
     }
 
@@ -388,7 +413,8 @@ mod test {
     fn publish_encoding_works() {
         let publish = sample_v5();
         let mut buf = BytesMut::new();
-        publish.write(&mut buf).unwrap();
+        //publish.write(&mut buf).unwrap();
+        publish.encode(Protocol::V5, &mut buf).unwrap();
         assert_eq!(&buf[..], sample_bytes());
     }
 

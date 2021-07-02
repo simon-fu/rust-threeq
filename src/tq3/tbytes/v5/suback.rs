@@ -20,30 +20,36 @@ impl SubAck {
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub fn len(&self, protocol:Protocol) -> usize {
         let mut len = 2 + self.return_codes.len();
 
-        match &self.properties {
-            Some(properties) => {
-                let properties_len = properties.len();
-                let properties_len_len = len_len(properties_len);
-                len += properties_len_len + properties_len;
-            }
-            None => {
-                // just 1 byte representing 0 len
-                len += 1;
+        if protocol == Protocol::V5{
+            match &self.properties {
+                Some(properties) => {
+                    let properties_len = properties.len();
+                    let properties_len_len = len_len(properties_len);
+                    len += properties_len_len + properties_len;
+                }
+                None => {
+                    // just 1 byte representing 0 len
+                    len += 1;
+                }
             }
         }
 
         len
     }
 
-    pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
         let variable_header_index = fixed_header.fixed_header_len;
         bytes.advance(variable_header_index);
 
         let pkid = read_u16(&mut bytes)?;
-        let properties = SubAckProperties::extract(&mut bytes)?;
+        let properties = if protocol == Protocol::V4{
+            None
+        } else {
+            SubAckProperties::extract(&mut bytes)?
+        };
 
         if !bytes.has_remaining() {
             return Err(Error::MalformedPacket);
@@ -64,19 +70,21 @@ impl SubAck {
         Ok(suback)
     }
 
-    pub fn write(&self, buffer: &mut BytesMut) -> Result<usize, Error> {
+    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         buffer.put_u8(0x90);
-        let remaining_len = self.len();
+        let remaining_len = self.len(protocol);
         let remaining_len_bytes = write_remaining_length(buffer, remaining_len)?;
 
         buffer.put_u16(self.pkid);
 
-        match &self.properties {
-            Some(properties) => properties.write(buffer)?,
-            None => {
-                write_remaining_length(buffer, 0)?;
-            }
-        };
+        if protocol == Protocol::V5 {
+            match &self.properties {
+                Some(properties) => properties.write(buffer)?,
+                None => {
+                    write_remaining_length(buffer, 0)?;
+                }
+            };
+        }
 
         let p: Vec<u8> = self.return_codes.iter().map(|code| *code as u8).collect();
         buffer.extend_from_slice(&p);
@@ -248,7 +256,7 @@ mod test {
         stream.extend_from_slice(&packetstream[..]);
         let fixed_header = parse_fixed_header(stream.iter()).unwrap();
         let suback_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let suback = SubAck::read(fixed_header, suback_bytes).unwrap();
+        let suback = SubAck::decode(Protocol::V5, fixed_header, suback_bytes).unwrap();
         assert_eq!(suback, sample());
     }
 
@@ -256,7 +264,7 @@ mod test {
     fn suback_encoding_works() {
         let publish = sample();
         let mut buf = BytesMut::new();
-        publish.write(&mut buf).unwrap();
+        publish.encode(Protocol::V5,&mut buf).unwrap();
 
         // println!("{:X?}", buf);
         // println!("{:#04X?}", &buf[..]);

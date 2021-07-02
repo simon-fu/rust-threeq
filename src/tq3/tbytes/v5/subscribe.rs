@@ -63,57 +63,82 @@ impl Subscribe {
         self
     }
 
-    pub fn len(&self) -> usize {
+    pub fn len(&self, protocol:Protocol) -> usize {
         let mut len = 2 + self.filters.iter().fold(0, |s, t| s + t.len());
 
-        if let Some(properties) = &self.properties {
-            let properties_len = properties.len();
-            let properties_len_len = len_len(properties_len);
-            len += properties_len_len + properties_len;
-        } else {
-            // just 1 byte representing 0 len
-            len += 1;
+        if protocol == Protocol::V5 {
+            if let Some(properties) = &self.properties {
+                let properties_len = properties.len();
+                let properties_len_len = len_len(properties_len);
+                len += properties_len_len + properties_len;
+            } else {
+                // just 1 byte representing 0 len
+                len += 1;
+            }
         }
 
         len
     }
 
-    pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
         let variable_header_index = fixed_header.fixed_header_len;
         bytes.advance(variable_header_index);
 
         let pkid = read_u16(&mut bytes)?;
-        let properties = SubscribeProperties::extract(&mut bytes)?;
+        let properties = if protocol == Protocol::V4{
+            None
+        } else {
+            SubscribeProperties::extract(&mut bytes)?
+        };
 
         // variable header size = 2 (packet identifier)
         let mut filters = Vec::new();
 
-        while bytes.has_remaining() {
-            let path = read_mqtt_string(&mut bytes)?;
-            let options = read_u8(&mut bytes)?;
-            let requested_qos = options & 0b0000_0011;
-
-            let nolocal = options >> 2 & 0b0000_0001;
-            let nolocal = if nolocal == 0 { false } else { true };
-
-            let preserve_retain = options >> 3 & 0b0000_0001;
-            let preserve_retain = if preserve_retain == 0 { false } else { true };
-
-            let retain_forward_rule = (options >> 4) & 0b0000_0011;
-            let retain_forward_rule = match retain_forward_rule {
-                0 => RetainForwardRule::OnEverySubscribe,
-                1 => RetainForwardRule::OnNewSubscribe,
-                2 => RetainForwardRule::Never,
-                r => return Err(Error::InvalidRetainForwardRule(r)),
-            };
-
-            filters.push(SubscribeFilter {
-                path,
-                qos: qos(requested_qos)?,
-                nolocal,
-                preserve_retain,
-                retain_forward_rule,
-            });
+        match protocol{
+            Protocol::V4 => {
+                while bytes.has_remaining() {
+                    let path = read_mqtt_string(&mut bytes)?;
+                    let options = read_u8(&mut bytes)?;
+                    let requested_qos = options & 0b0000_0011;
+        
+                    filters.push(SubscribeFilter {
+                        path,
+                        qos: qos(requested_qos)?,
+                        nolocal:false,
+                        preserve_retain:false,
+                        retain_forward_rule:RetainForwardRule::OnEverySubscribe,
+                    });
+                }
+            },
+            Protocol::V5 => {
+                while bytes.has_remaining() {
+                    let path = read_mqtt_string(&mut bytes)?;
+                    let options = read_u8(&mut bytes)?;
+                    let requested_qos = options & 0b0000_0011;
+        
+                    let nolocal = options >> 2 & 0b0000_0001;
+                    let nolocal = if nolocal == 0 { false } else { true };
+        
+                    let preserve_retain = options >> 3 & 0b0000_0001;
+                    let preserve_retain = if preserve_retain == 0 { false } else { true };
+        
+                    let retain_forward_rule = (options >> 4) & 0b0000_0011;
+                    let retain_forward_rule = match retain_forward_rule {
+                        0 => RetainForwardRule::OnEverySubscribe,
+                        1 => RetainForwardRule::OnNewSubscribe,
+                        2 => RetainForwardRule::Never,
+                        r => return Err(Error::InvalidRetainForwardRule(r)),
+                    };
+        
+                    filters.push(SubscribeFilter {
+                        path,
+                        qos: qos(requested_qos)?,
+                        nolocal,
+                        preserve_retain,
+                        retain_forward_rule,
+                    });
+                }
+            },
         }
 
         let subscribe = Subscribe {
@@ -125,27 +150,38 @@ impl Subscribe {
         Ok(subscribe)
     }
 
-    pub fn write(&self, buffer: &mut BytesMut) -> Result<usize, Error> {
+    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         // write packet type
         buffer.put_u8(0x82);
 
         // write remaining length
-        let remaining_len = self.len();
+        let remaining_len = self.len(protocol);
         let remaining_len_bytes = write_remaining_length(buffer, remaining_len)?;
 
         // write packet id
         buffer.put_u16(self.pkid);
 
-        match &self.properties {
-            Some(properties) => properties.write(buffer)?,
-            None => {
-                write_remaining_length(buffer, 0)?;
-            }
-        };
+        match protocol{
+            Protocol::V4 => {
+                // write filters
+                for filter in self.filters.iter() {
+                    let f = SubscribeFilter::new(filter.path.clone(), filter.qos);
+                    f.write(buffer);
+                }
+            },
+            Protocol::V5 => {
+                match &self.properties {
+                    Some(properties) => properties.write(buffer)?,
+                    None => {
+                        write_remaining_length(buffer, 0)?;
+                    }
+                };
 
-        // write filters
-        for filter in self.filters.iter() {
-            filter.write(buffer);
+                // write filters
+                for filter in self.filters.iter() {
+                    filter.write(buffer);
+                }
+            },
         }
 
         Ok(1 + remaining_len_bytes + remaining_len)
@@ -373,7 +409,7 @@ mod test {
 
         let fixed_header = parse_fixed_header(stream.iter()).unwrap();
         let subscribe_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let subscribe = Subscribe::read(fixed_header, subscribe_bytes).unwrap();
+        let subscribe = Subscribe::decode(Protocol::V5, fixed_header, subscribe_bytes).unwrap();
         assert_eq!(subscribe, sample());
     }
 
@@ -381,7 +417,7 @@ mod test {
     fn subscribe_encoding_works() {
         let publish = sample();
         let mut buf = BytesMut::new();
-        publish.write(&mut buf).unwrap();
+        publish.encode(Protocol::V5,&mut buf).unwrap();
 
         // println!("{:X?}", buf);
         // println!("{:#04X?}", &buf[..]);
@@ -413,7 +449,7 @@ mod test {
 
         let fixed_header = parse_fixed_header(stream.iter()).unwrap();
         let subscribe_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let subscribe = Subscribe::read(fixed_header, subscribe_bytes).unwrap();
+        let subscribe = Subscribe::decode(Protocol::V5, fixed_header, subscribe_bytes).unwrap();
         assert_eq!(subscribe, sample2());
     }
 
@@ -421,7 +457,7 @@ mod test {
     fn subscribe2_encoding_works() {
         let publish = sample2();
         let mut buf = BytesMut::new();
-        publish.write(&mut buf).unwrap();
+        publish.encode(Protocol::V5,&mut buf).unwrap();
 
         // println!("{:X?}", buf);
         // println!("{:#04X?}", &buf[..]);

@@ -33,33 +33,32 @@ impl PubAck {
         }
     }
 
-    fn len(&self) -> usize {
+    fn len(&self, protocol:Protocol) -> usize {
         let mut len = 2 + 1; // pkid + reason
 
         // If there are no properties, sending reason code is optional
-        if self.reason == PubAckReason::Success && self.properties.is_none() {
+        if (self.reason == PubAckReason::Success && self.properties.is_none()) || protocol == Protocol::V4{
             return 2;
         }
 
+        // Unlike other packets, property length can be ignored if there are
+        // no properties in acks
         if let Some(properties) = &self.properties {
             let properties_len = properties.len();
             let properties_len_len = len_len(properties_len);
             len += properties_len_len + properties_len;
         }
 
-        // Unlike other packets, property length can be ignored if there are
-        // no properties in acks
-
         len
     }
 
-    pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
         let variable_header_index = fixed_header.fixed_header_len;
         bytes.advance(variable_header_index);
         let pkid = read_u16(&mut bytes)?;
 
         // No reason code or properties if remaining length == 2
-        if fixed_header.remaining_len == 2 {
+        if fixed_header.remaining_len == 2 || protocol == Protocol::V4 {
             return Ok(PubAck {
                 pkid,
                 reason: PubAckReason::Success,
@@ -86,15 +85,19 @@ impl PubAck {
         Ok(puback)
     }
 
-    pub fn write(&self, buffer: &mut BytesMut) -> Result<usize, Error> {
-        let len = self.len();
+    // pub fn read(fixed_header: FixedHeader, bytes: Bytes) -> Result<Self, Error> {
+    //     Self::decode(Protocol::V5, fixed_header, bytes)
+    // }
+
+    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
+        let len = self.len(protocol);
         buffer.put_u8(0x40);
 
         let count = write_remaining_length(buffer, len)?;
         buffer.put_u16(self.pkid);
 
         // Reason code is optional with success if there are no properties
-        if self.reason == PubAckReason::Success && self.properties.is_none() {
+        if (self.reason == PubAckReason::Success && self.properties.is_none()) || protocol == Protocol::V4 {
             return Ok(4);
         }
 
@@ -105,6 +108,10 @@ impl PubAck {
 
         Ok(1 + count + len)
     }
+
+    // pub fn write(&self, buffer: &mut BytesMut) -> Result<usize, Error> {
+    //     self.encode(Protocol::V5, buffer)
+    // }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -135,19 +135,19 @@ pub fn read(stream: &mut BytesMut, max_size: usize) -> Result<Packet, Error> {
     let packet = packet.freeze();
     let packet = match packet_type {
         PacketType::Connect => Packet::Connect(Connect::read(fixed_header, packet)?),
-        PacketType::ConnAck => Packet::ConnAck(ConnAck::read(fixed_header, packet)?),
-        PacketType::Publish => Packet::Publish(Publish::read(fixed_header, packet)?),
-        PacketType::PubAck => Packet::PubAck(PubAck::read(fixed_header, packet)?),
-        PacketType::PubRec => Packet::PubRec(PubRec::read(fixed_header, packet)?),
-        PacketType::PubRel => Packet::PubRel(PubRel::read(fixed_header, packet)?),
-        PacketType::PubComp => Packet::PubComp(PubComp::read(fixed_header, packet)?),
-        PacketType::Subscribe => Packet::Subscribe(Subscribe::read(fixed_header, packet)?),
-        PacketType::SubAck => Packet::SubAck(SubAck::read(fixed_header, packet)?),
-        PacketType::Unsubscribe => Packet::Unsubscribe(Unsubscribe::read(fixed_header, packet)?),
-        PacketType::UnsubAck => Packet::UnsubAck(UnsubAck::read(fixed_header, packet)?),
+        PacketType::ConnAck => Packet::ConnAck(ConnAck::decode(Protocol::V5, fixed_header, packet)?),
+        PacketType::Publish => Packet::Publish(Publish::decode(Protocol::V5, fixed_header, packet)?),
+        PacketType::PubAck => Packet::PubAck(PubAck::decode(Protocol::V5, fixed_header, packet)?),
+        PacketType::PubRec => Packet::PubRec(PubRec::decode(Protocol::V5, fixed_header, packet)?),
+        PacketType::PubRel => Packet::PubRel(PubRel::decode(Protocol::V5, fixed_header, packet)?),
+        PacketType::PubComp => Packet::PubComp(PubComp::decode(Protocol::V5, fixed_header, packet)?),
+        PacketType::Subscribe => Packet::Subscribe(Subscribe::decode(Protocol::V5, fixed_header, packet)?),
+        PacketType::SubAck => Packet::SubAck(SubAck::decode(Protocol::V5, fixed_header, packet)?),
+        PacketType::Unsubscribe => Packet::Unsubscribe(Unsubscribe::decode(Protocol::V5, fixed_header, packet)?),
+        PacketType::UnsubAck => Packet::UnsubAck(UnsubAck::decode(Protocol::V5, fixed_header, packet)?),
         PacketType::PingReq => Packet::PingReq,
         PacketType::PingResp => Packet::PingResp,
-        PacketType::Disconnect => Packet::Disconnect(Disconnect::read(fixed_header, packet)?),
+        PacketType::Disconnect => Packet::Disconnect(Disconnect::decode(Protocol::V5, fixed_header, packet)?),
     };
 
     Ok(packet)
