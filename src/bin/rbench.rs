@@ -1,8 +1,9 @@
 
-use std::{sync::Arc, time::Duration};
+
+use std::{fmt::Debug, sync::Arc, time::Duration};
 
 use bytes::{Bytes, BytesMut};
-use rust_threeq::tq3::tt;
+use rust_threeq::tq3::{self, tt};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream, tcp::{ReadHalf, WriteHalf}}, select, sync::broadcast, time::{Instant}};
 use tracing::{debug, error, info};
 use clap::{Clap};
@@ -519,18 +520,7 @@ async fn run_server(cfg:&Config) -> core::result::Result<(), Box<dyn std::error:
 #[tokio::main]
 async fn main() {
 
-    use tracing_subscriber::EnvFilter;
-    
-    let env_filter = if std::env::var(EnvFilter::DEFAULT_ENV).is_ok() {
-        EnvFilter::from_default_env()
-    } else {
-        EnvFilter::new("info")
-    };
-
-    tracing_subscriber::fmt()
-    .with_target(false)
-    .with_env_filter(env_filter)
-    .init();
+    tq3::log::tracing_subscriber::init();
 
     let cfg = Config::parse();
     info!("cfg={:?}", cfg);

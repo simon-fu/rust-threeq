@@ -2,7 +2,7 @@
 use std::{sync::Arc, time::Duration};
 
 use bytes::{Bytes, BytesMut};
-use rust_threeq::tq3::tt;
+use rust_threeq::tq3::{self, tt};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream, tcp::{ReadHalf, WriteHalf}}, select, sync::broadcast, time::{Instant}};
 use tracing::{debug, error, info};
 use clap::{Clap};
@@ -488,15 +488,20 @@ async fn run_server(cfg:&Config) -> core::result::Result<(), Box<dyn std::error:
             result = listener.accept() => {
                 match result{
                     Ok((socket, _)) => {
-                        debug!("connected from {:?}", socket.peer_addr().unwrap());
-                        let hub0 = hub.clone();
                         uid += 1;
-                        tokio::spawn(async move {
+
+                        // let t = uid;
+                        let span = tracing::span!(tracing::Level::INFO, "", t=uid);
+
+                        let hub0 = hub.clone();
+                        let f = async move {
+                            debug!("connected from {:?}", socket.peer_addr().unwrap());
                             let mut session = Session::new(hub0, uid);
                             if let Err(e) = session.run(socket).await {
                                 debug!("session finished error [{:?}]", e);
                             }
-                        });
+                        };
+                        tokio::spawn(tracing::Instrument::instrument(f, span));
                     },
                     Err(e) => {
                         error!("listener accept error {}", e);
@@ -519,24 +524,13 @@ async fn run_server(cfg:&Config) -> core::result::Result<(), Box<dyn std::error:
 #[tokio::main]
 async fn main() {
 
-    use tracing_subscriber::EnvFilter;
-    
-    let env_filter = if std::env::var(EnvFilter::DEFAULT_ENV).is_ok() {
-        EnvFilter::from_default_env()
-    } else {
-        EnvFilter::new("info")
-    };
-
-    tracing_subscriber::fmt()
-    .with_target(false)
-    .with_env_filter(env_filter)
-    .init();
+    tq3::log::tracing_subscriber::init();
 
     let cfg = Config::parse();
     info!("cfg={:?}", cfg);
     
     match run_server(&cfg).await {
-        Ok(_) => todo!(),
+        Ok(_) => {},
         Err(e) => {
             error!("{}", e);
         },
