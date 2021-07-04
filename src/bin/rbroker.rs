@@ -1,5 +1,5 @@
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use rust_threeq::tq3::{self, tt};
@@ -99,7 +99,7 @@ mod hub{
     use std::{collections::HashMap, sync::Arc};
     use rust_threeq::tq3::tt;
     use tokio::sync::RwLock;
-
+    use tracing::debug;
 
     pub enum BcData {
         PUB(tt::Publish),
@@ -119,13 +119,19 @@ mod hub{
             if !map.contains_key(topic_filter){
                 map.insert(topic_filter.to_string(), HashMap::new());
             }
-            map.get_mut(topic_filter).unwrap().insert(uid, tx);
+            let senders = map.get_mut(topic_filter).unwrap();
+            senders.insert(uid, tx);
+            debug!("subscribe filter {}, uid {}, num {}", topic_filter, uid, senders.len());
         }
 
         pub async fn unsubscribe(&self, topic_filter : &str, uid : u64){
             let mut map = self.subscriptions.write().await;
             if let Some(senders) = map.get_mut(topic_filter) {
                 senders.remove(&uid);
+                debug!("unsubscribe filter {}, uid {}, num {}", topic_filter, uid, senders.len());
+                if senders.is_empty(){
+                    map.remove(topic_filter);
+                }
             }
         }
 
@@ -140,6 +146,7 @@ mod hub{
                 None => {}
             }
         }
+
     }
 
 }
@@ -154,6 +161,8 @@ struct Session{
     last_active_time : Instant,
     tx : broadcast::Sender<Arc<hub::BcData>>, 
     rx : broadcast::Receiver<Arc<hub::BcData>>,
+    disconnected : bool,
+    topic_filters : HashSet<String>,
 }
 
 
@@ -171,9 +180,17 @@ impl Session {
             last_active_time : Instant::now(),
             tx,
             rx, 
+            disconnected : false,
+            topic_filters: HashSet::new(),
         }
     }
 
+    pub async fn cleanup(&mut self){
+        for v in &self.topic_filters{
+            self.hub.unsubscribe(v, self.uid).await;
+        }
+        self.topic_filters.clear();
+    }
 
     fn check_connect(&mut self){
         if self.conn_pkt.client_id.is_empty(){
@@ -219,7 +236,7 @@ impl Session {
 
         let (mut rd, mut wr) = socket.split();
 
-        loop{
+        while !self.disconnected {
             let rd_timeout = self.check_alive()?;
             let dead_line = Instant::now() + Duration::from_millis(rd_timeout);
             let mut dump_buf = [0u8;1];
@@ -258,6 +275,7 @@ impl Session {
                 }
             }
         }
+        Ok(())
     }
 
     fn is_got_connect(&self) -> bool{
@@ -325,6 +343,7 @@ impl Session {
         let mut return_codes:Vec<tt::SubscribeReasonCode> = Vec::new();
         for val in packet.filters.iter() {
             self.hub.subscribe(&val.path, self.uid, self.tx.clone()).await;
+            self.topic_filters.insert(val.path.clone());
             return_codes.push(tt::SubscribeReasonCode::QoS0);
         }
         
@@ -338,7 +357,9 @@ impl Session {
         let packet = tt::Unsubscribe::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
 
         for topic in packet.filters.iter(){
-            self.hub.unsubscribe(topic, self.uid).await;
+            if self.topic_filters.remove(topic) {
+                self.hub.unsubscribe(topic, self.uid).await;
+            }
         }
 
         let ack = tt::UnsubAck::new(packet.pkid);
@@ -353,10 +374,12 @@ impl Session {
         Ok(())
     }
 
-    // async fn handle_disconnect(&mut self, fixed_header: tt::FixedHeader, bytes: Bytes, _obuf : &mut BytesMut) -> AppResult<()> {
-    //     let pkt = tt::Disconnect::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
-    //     Ok(())
-    // }
+    async fn handle_disconnect(&mut self, fixed_header: tt::FixedHeader, bytes: Bytes, _obuf : &mut BytesMut) -> AppResult<()> {
+        let _pkt = tt::Disconnect::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
+        debug!("disconnect by client");
+        self.disconnected = true;
+        Ok(())
+    }
 
     async fn handle_unexpect(&mut self, packet_type : tt::PacketType) -> AppResult<()> {
         Err(AppError::UnexpectPacket(packet_type))
@@ -365,7 +388,7 @@ impl Session {
     
 
     async fn handle_incoming(&mut self, ibuf : &mut BytesMut, obuf : &mut BytesMut) -> AppResult<()>{
-        loop{
+        while !self.disconnected{
             let r = tt::check(ibuf.iter(), self.max_incoming_size);
             match r{
                 Err(tt::Error::InsufficientBytes(_required)) => return Ok(()),
@@ -394,13 +417,14 @@ impl Session {
                         // tt::PacketType::UnsubAck    => todo!(),
                         tt::PacketType::PingReq     => {self.handle_pingreq(h, bytes, obuf).await?;},
                         // tt::PacketType::PingResp    => todo!(),
-                        // tt::PacketType::Disconnect  => {self.handle_disconnect(h, bytes, obuf).await?;},
+                        tt::PacketType::Disconnect  => {self.handle_disconnect(h, bytes, obuf).await?;},
                         _ => {self.handle_unexpect(packet_type).await?;},
                     }
                     
                 }
             }
         }
+        Ok(())
     }
 
     async fn xfer_loop<'a>(&mut self, rd : &mut ReadHalf<'a>, wr : &mut WriteHalf<'a>, pubd : Option<Arc<hub::BcData>>) -> AppResult<()> {
@@ -415,7 +439,7 @@ impl Session {
             }
         }
         
-        loop{
+        while !self.disconnected{
             let rd_timeout = self.check_alive()?;
             let rd_timeout = if obuf.len() == 0 && rd_timeout > 10000 {
                 10000
@@ -470,6 +494,7 @@ impl Session {
                 }
             }
         }
+        Ok(())
     }
 
 }
@@ -489,10 +514,8 @@ async fn run_server(cfg:&Config) -> core::result::Result<(), Box<dyn std::error:
                 match result{
                     Ok((socket, _)) => {
                         uid += 1;
-
-                        // let t = uid;
                         let span = tracing::span!(tracing::Level::INFO, "", t=uid);
-
+                        
                         let hub0 = hub.clone();
                         let f = async move {
                             debug!("connected from {:?}", socket.peer_addr().unwrap());
@@ -500,6 +523,7 @@ async fn run_server(cfg:&Config) -> core::result::Result<(), Box<dyn std::error:
                             if let Err(e) = session.run(socket).await {
                                 debug!("session finished error [{:?}]", e);
                             }
+                            session.cleanup().await;
                         };
                         tokio::spawn(tracing::Instrument::instrument(f, span));
                     },

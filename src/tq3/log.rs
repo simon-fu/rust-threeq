@@ -23,6 +23,7 @@ pub mod tracing_subscriber{
     impl Default for MyFormatter<ChronoUtc> {
         fn default() -> Self {
             MyFormatter {
+                // see https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html
                 timer: ChronoUtc::with_format("%m-%d %H:%M:%S%.3f".to_string()),
             }
         }
