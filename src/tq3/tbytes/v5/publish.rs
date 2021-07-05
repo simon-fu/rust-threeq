@@ -41,14 +41,14 @@ impl Publish {
         }
     }
 
-    pub fn len(&self, protocol:Protocol) -> usize {
+    pub fn len(&self, protocol: Protocol) -> usize {
         let mut len = 2 + self.topic.len();
         if self.qos != QoS::AtMostOnce && self.pkid != 0 {
             len += 2;
         }
 
         match protocol {
-            Protocol::V4 => {},
+            Protocol::V4 => {}
             Protocol::V5 => {
                 match &self.properties {
                     Some(properties) => {
@@ -61,7 +61,7 @@ impl Publish {
                         len += 1;
                     }
                 }
-            },
+            }
         }
 
         len += self.payload.len();
@@ -72,7 +72,11 @@ impl Publish {
     //     return Self::decode(Protocol::V5, fixed_header, bytes);
     // }
 
-    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(
+        protocol: Protocol,
+        fixed_header: FixedHeader,
+        mut bytes: Bytes,
+    ) -> Result<Self, Error> {
         let qos = qos((fixed_header.byte1 & 0b0110) >> 1)?;
         let dup = (fixed_header.byte1 & 0b1000) != 0;
         let retain = (fixed_header.byte1 & 0b0001) != 0;
@@ -107,11 +111,16 @@ impl Publish {
         Ok(publish)
     }
 
-    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
+    pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         self.encode_with_pktid(protocol, self.pkid, buffer)
     }
 
-    pub fn encode_with_pktid(&self, protocol:Protocol, pktid:u16, buffer: &mut BytesMut) -> Result<usize, Error> {
+    pub fn encode_with_pktid(
+        &self,
+        protocol: Protocol,
+        pktid: u16,
+        buffer: &mut BytesMut,
+    ) -> Result<usize, Error> {
         let len = self.len(protocol);
 
         let dup = self.dup as u8;
@@ -131,7 +140,7 @@ impl Publish {
         }
 
         match protocol {
-            Protocol::V4 => {},
+            Protocol::V4 => {}
             Protocol::V5 => {
                 match &self.properties {
                     Some(properties) => properties.write(buffer)?,
@@ -139,7 +148,7 @@ impl Publish {
                         write_remaining_length(buffer, 0)?;
                     }
                 };
-            },
+            }
         }
 
         buffer.extend_from_slice(&self.payload);

@@ -26,11 +26,13 @@ impl PubComp {
         }
     }
 
-    fn len(&self, protocol:Protocol) -> usize {
+    fn len(&self, protocol: Protocol) -> usize {
         let mut len = 2 + 1; // pkid + reason
 
         // If there are no properties during success, sending reason code is optional
-        if (self.reason == PubCompReason::Success && self.properties.is_none()) || protocol == Protocol::V4 {
+        if (self.reason == PubCompReason::Success && self.properties.is_none())
+            || protocol == Protocol::V4
+        {
             return 2;
         }
 
@@ -43,12 +45,16 @@ impl PubComp {
         len
     }
 
-    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(
+        protocol: Protocol,
+        fixed_header: FixedHeader,
+        mut bytes: Bytes,
+    ) -> Result<Self, Error> {
         let variable_header_index = fixed_header.fixed_header_len;
         bytes.advance(variable_header_index);
         let pkid = read_u16(&mut bytes)?;
 
-        if fixed_header.remaining_len == 2 || protocol == Protocol::V4{
+        if fixed_header.remaining_len == 2 || protocol == Protocol::V4 {
             return Ok(PubComp {
                 pkid,
                 reason: PubCompReason::Success,
@@ -74,14 +80,16 @@ impl PubComp {
         Ok(puback)
     }
 
-    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
+    pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         let len = self.len(protocol);
         buffer.put_u8(0x70);
         let count = write_remaining_length(buffer, len)?;
         buffer.put_u16(self.pkid);
 
         // If there are no properties during success, sending reason code is optional
-        if (self.reason == PubCompReason::Success && self.properties.is_none()) || protocol == Protocol::V4 {
+        if (self.reason == PubCompReason::Success && self.properties.is_none())
+            || protocol == Protocol::V4
+        {
             return Ok(4);
         }
 
@@ -232,7 +240,7 @@ mod test {
     fn pubcomp_encoding_works_correctly() {
         let pubcomp = sample();
         let mut buf = BytesMut::new();
-        pubcomp.encode(Protocol::V5,&mut buf).unwrap();
+        pubcomp.encode(Protocol::V5, &mut buf).unwrap();
         assert_eq!(&buf[..], sample_bytes());
     }
 }

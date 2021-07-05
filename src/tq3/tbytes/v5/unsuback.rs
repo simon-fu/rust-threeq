@@ -31,11 +31,9 @@ impl UnsubAck {
         }
     }
 
-    pub fn len(&self, protocol:Protocol) -> usize {
+    pub fn len(&self, protocol: Protocol) -> usize {
         match protocol {
-            Protocol::V4 => {
-                2
-            },
+            Protocol::V4 => 2,
             Protocol::V5 => {
                 let mut len = 2 + self.reasons.len();
 
@@ -52,24 +50,32 @@ impl UnsubAck {
                 }
 
                 len
-            },
+            }
         }
     }
 
-    pub fn decode(protocal:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(
+        protocal: Protocol,
+        fixed_header: FixedHeader,
+        mut bytes: Bytes,
+    ) -> Result<Self, Error> {
         match protocal {
             Protocol::V4 => {
                 if fixed_header.remaining_len != 2 {
                     return Err(Error::PayloadSizeIncorrect);
                 }
-        
+
                 let variable_header_index = fixed_header.fixed_header_len;
                 bytes.advance(variable_header_index);
                 let pkid = read_u16(&mut bytes)?;
-                let unsuback = UnsubAck { pkid, reasons:vec![], properties:None };
-        
+                let unsuback = UnsubAck {
+                    pkid,
+                    reasons: vec![],
+                    properties: None,
+                };
+
                 Ok(unsuback)
-            },
+            }
             Protocol::V5 => {
                 let variable_header_index = fixed_header.fixed_header_len;
                 bytes.advance(variable_header_index);
@@ -94,12 +100,11 @@ impl UnsubAck {
                 };
 
                 Ok(unsuback)
-            },
+            }
         }
-        
     }
 
-    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
+    pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         buffer.put_u8(0xB0);
         let remaining_len = self.len(protocol);
         let remaining_len_bytes = write_remaining_length(buffer, remaining_len)?;
@@ -113,11 +118,11 @@ impl UnsubAck {
                     write_remaining_length(buffer, 0)?;
                 }
             };
-    
+
             let p: Vec<u8> = self.reasons.iter().map(|code| *code as u8).collect();
             buffer.extend_from_slice(&p);
         }
-        
+
         Ok(1 + remaining_len_bytes + remaining_len)
     }
 }

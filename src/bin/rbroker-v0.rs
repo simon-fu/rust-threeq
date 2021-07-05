@@ -1,25 +1,31 @@
-
 use std::{sync::Arc, time::Duration};
 
-use bytes::{BytesMut};
-use tokio::{io::{AsyncWriteExt}, net::{TcpListener, TcpStream, tcp::{ReadHalf, WriteHalf}}, select, sync::broadcast, time::Instant};
+use bytes::BytesMut;
+use clap::Clap;
+use tokio::{
+    io::AsyncWriteExt,
+    net::{
+        tcp::{ReadHalf, WriteHalf},
+        TcpListener, TcpStream,
+    },
+    select,
+    sync::broadcast,
+    time::Instant,
+};
 use tracing::{debug, error, info, warn};
-use clap::{Clap};
 
 // refer https://doc.rust-lang.org/reference/conditional-compilation.html?highlight=target_os#target_os
 // refer https://doc.rust-lang.org/rust-by-example/attribute/cfg.html
 // refer https://cloud.tencent.com/developer/article/1138651
-fn call_malloc_trim() -> bool{
+fn call_malloc_trim() -> bool {
     #[cfg(target_os = "linux")]
     {
         extern "C" {
             fn malloc_trim(pad: usize) -> i32;
         }
-    
-        let freed = unsafe { 
-            malloc_trim(128*1024)
-        };
-        return if freed == 0 {false} else {true};
+
+        let freed = unsafe { malloc_trim(128 * 1024) };
+        return if freed == 0 { false } else { true };
         //debug!("malloc_trim freed {}", freed);
     }
 
@@ -31,19 +37,26 @@ fn call_malloc_trim() -> bool{
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
 #[derive(Clap, Debug, Default)]
-#[clap(name="threeq broker", author, about, version)]
-struct Config{
-    #[clap(short='l', long="tcp-listen", default_value = "0.0.0.0:1883", long_about="tcp listen address.")]
-    tcp_listen_addr: String, 
+#[clap(name = "threeq broker", author, about, version)]
+struct Config {
+    #[clap(
+        short = 'l',
+        long = "tcp-listen",
+        default_value = "0.0.0.0:1883",
+        long_about = "tcp listen address."
+    )]
+    tcp_listen_addr: String,
 
-    #[clap(short='g', long="enable_gc", long_about="enable memory garbage collection")]
+    #[clap(
+        short = 'g',
+        long = "enable_gc",
+        long_about = "enable memory garbage collection"
+    )]
     enable_gc: bool,
 }
 
-
-
-fn from_v4_lastwill(other : &mqttbytes::v4::LastWill) -> mqttbytes::v5::LastWill{
-    mqttbytes::v5::LastWill{
+fn from_v4_lastwill(other: &mqttbytes::v4::LastWill) -> mqttbytes::v5::LastWill {
+    mqttbytes::v5::LastWill {
         topic: other.topic.clone(),
         message: other.message.clone(),
         qos: other.qos,
@@ -52,23 +65,31 @@ fn from_v4_lastwill(other : &mqttbytes::v4::LastWill) -> mqttbytes::v5::LastWill
     }
 }
 
-
-
-mod util{
-    use std::time::Duration;
+mod util {
     use bytes::BytesMut;
+    use std::time::Duration;
     use tokio::{io::AsyncReadExt, net::tcp::ReadHalf, time::Instant};
 
-    pub async fn wait_for_packet<'a>(rd : &mut ReadHalf<'a>, buf : &mut BytesMut, max_packet_size: usize, timeout_millis:u64) -> std::io::Result<usize> {
+    pub async fn wait_for_packet<'a>(
+        rd: &mut ReadHalf<'a>,
+        buf: &mut BytesMut,
+        max_packet_size: usize,
+        timeout_millis: u64,
+    ) -> std::io::Result<usize> {
         let dead_line = Instant::now() + Duration::from_millis(timeout_millis);
 
-        loop{
+        loop {
             if buf.len() >= 2 {
                 let r = mqttbytes::check(buf.iter(), max_packet_size);
-                match r{
+                match r {
                     Ok(h) => return Ok(h.frame_length()),
-                    Err(mqttbytes::Error::InsufficientBytes(_required)) => {},
-                    Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
+                    Err(mqttbytes::Error::InsufficientBytes(_required)) => {}
+                    Err(e) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            e.to_string(),
+                        ))
+                    }
                 }
             }
 
@@ -94,7 +115,7 @@ mod util{
         }
     }
 
-    pub fn parse_protocol_level(buf : & BytesMut) -> std::io::Result<mqttbytes::Protocol>{
+    pub fn parse_protocol_level(buf: &BytesMut) -> std::io::Result<mqttbytes::Protocol> {
         // Connect Packet
         //      byte 0: packet-type:4bit, reserved:4bit
         //      byte 1: Remaining Length
@@ -103,7 +124,7 @@ mod util{
         //      byte 8: level
         if buf.len() < 9 {
             let error = format!("parsing protocol level: too short {}", buf.len());
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error));
         }
 
         let protocol_level = buf[8];
@@ -113,16 +134,14 @@ mod util{
             num => {
                 let error = format!("unknown mqtt protocol level {}", num);
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error));
-            },
+            }
         };
     }
-    
 }
 
-mod hub{
+mod hub {
     use std::{collections::HashMap, sync::Arc};
     use tokio::sync::RwLock;
-
 
     pub enum PubData {
         V4(mqttbytes::v4::Publish),
@@ -140,106 +159,110 @@ mod hub{
     //     }
     // }
 
-
     type PubSender = tokio::sync::broadcast::Sender<Arc<PubData>>;
 
-    #[derive(Default,Debug)]
-    pub struct Hub{
+    #[derive(Default, Debug)]
+    pub struct Hub {
         // topic_filter -> senders
-        subscriptions : RwLock<HashMap<String, HashMap<u64, PubSender>>>,
+        subscriptions: RwLock<HashMap<String, HashMap<u64, PubSender>>>,
     }
 
     impl Hub {
-        pub async fn subscribe(&self, topic_filter : &str, uid : u64, tx : PubSender){
+        pub async fn subscribe(&self, topic_filter: &str, uid: u64, tx: PubSender) {
             let mut map = self.subscriptions.write().await;
-            if !map.contains_key(topic_filter){
+            if !map.contains_key(topic_filter) {
                 map.insert(topic_filter.to_string(), HashMap::new());
             }
             map.get_mut(topic_filter).unwrap().insert(uid, tx);
         }
 
-        pub async fn unsubscribe(&self, topic_filter : &str, uid : u64){
+        pub async fn unsubscribe(&self, topic_filter: &str, uid: u64) {
             let mut map = self.subscriptions.write().await;
             if let Some(senders) = map.get_mut(topic_filter) {
                 senders.remove(&uid);
             }
         }
 
-        pub async fn publish(&self, filter:&str, d : Arc<PubData>){
+        pub async fn publish(&self, filter: &str, d: Arc<PubData>) {
             let map = self.subscriptions.read().await;
             match map.get(filter) {
                 Some(senders) => {
-                    for (_, tx) in senders.iter(){
+                    for (_, tx) in senders.iter() {
                         let _ = tx.send(d.clone());
                     }
-                },
+                }
                 None => {}
             }
         }
     }
-
 }
 
-struct Session{
-    hub : Arc<hub::Hub>,
-    uid : u64,
-    max_incoming_size : usize,
-    protocol : mqttbytes::Protocol,
-    keep_alive_ms : u64,
-    conn_pkt : mqttbytes::v5::Connect,
+struct Session {
+    hub: Arc<hub::Hub>,
+    uid: u64,
+    max_incoming_size: usize,
+    protocol: mqttbytes::Protocol,
+    keep_alive_ms: u64,
+    conn_pkt: mqttbytes::v5::Connect,
     packet_id: u16,
-    last_active_time : Instant,
-    tx : broadcast::Sender<Arc<hub::PubData>>, 
-    rx : broadcast::Receiver<Arc<hub::PubData>>,
+    last_active_time: Instant,
+    tx: broadcast::Sender<Arc<hub::PubData>>,
+    rx: broadcast::Receiver<Arc<hub::PubData>>,
 }
 
 impl Session {
-    pub fn new(hub : Arc<hub::Hub>, uid : u64) -> Self{
+    pub fn new(hub: Arc<hub::Hub>, uid: u64) -> Self {
         let (tx, rx) = broadcast::channel(16);
 
-        Session{
+        Session {
             hub,
             uid,
-            max_incoming_size : 64*1024,
-            protocol : mqttbytes::Protocol::V5,
-            keep_alive_ms : 30 * 1000,
-            conn_pkt : mqttbytes::v5::Connect::new(""),
-            packet_id : 0,
-            last_active_time : Instant::now(),
+            max_incoming_size: 64 * 1024,
+            protocol: mqttbytes::Protocol::V5,
+            keep_alive_ms: 30 * 1000,
+            conn_pkt: mqttbytes::v5::Connect::new(""),
+            packet_id: 0,
+            last_active_time: Instant::now(),
             tx,
-            rx, 
+            rx,
         }
     }
 
-    pub fn assign_conn_pkt_v4(&mut self, pkt : &mqttbytes::v4::Connect){
+    pub fn assign_conn_pkt_v4(&mut self, pkt: &mqttbytes::v4::Connect) {
         //self.conn_pkt.protocol = pkt.protocol;
         self.conn_pkt.keep_alive = pkt.keep_alive;
         self.conn_pkt.client_id = pkt.client_id.clone();
         self.conn_pkt.clean_session = pkt.clean_session;
-        self.conn_pkt.last_will = if !pkt.last_will.is_none() {Some(from_v4_lastwill(pkt.last_will.as_ref().unwrap()))} else {None};
+        self.conn_pkt.last_will = if !pkt.last_will.is_none() {
+            Some(from_v4_lastwill(pkt.last_will.as_ref().unwrap()))
+        } else {
+            None
+        };
         self.conn_pkt.login = None; // TODO
-        //self.conn_pkt.properties = None;
+                                    //self.conn_pkt.properties = None;
 
         self.protocol = mqttbytes::Protocol::V4;
         self.check_connect();
     }
 
-    pub fn assign_conn_pkt_v5(&mut self, pkt : &mqttbytes::v5::Connect){
+    pub fn assign_conn_pkt_v5(&mut self, pkt: &mqttbytes::v5::Connect) {
         self.conn_pkt = pkt.clone();
         self.protocol = mqttbytes::Protocol::V5;
         self.check_connect();
     }
 
-    fn check_connect(&mut self){
-        if self.conn_pkt.client_id.is_empty(){
-            let duration = std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap();
+    fn check_connect(&mut self) {
+        if self.conn_pkt.client_id.is_empty() {
+            let duration = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap();
             let in_nanos = duration.as_secs() * 1_000_000 + duration.subsec_nanos() as u64;
             self.conn_pkt.client_id = format!("{}@abcdef", in_nanos); //UNIX_EPOCH
         }
 
         self.keep_alive_ms = self.conn_pkt.keep_alive as u64 * 1000 * 2;
         if self.keep_alive_ms == 0 {
-            self.keep_alive_ms = 30*1000;
+            self.keep_alive_ms = 30 * 1000;
         }
     }
 
@@ -250,8 +273,6 @@ impl Session {
         }
         return self.packet_id;
     }
-
-
 
     // /// Reads more than 'required' bytes to frame a packet into self.read buffer
     // async fn read_bytes(&mut self, required: usize, buf : &mut BytesMut) -> std::io::Result<usize> {
@@ -279,7 +300,10 @@ impl Session {
     //     }
     // }
 
-    pub async fn read_v4(&mut self, buf : &mut BytesMut) -> Result<mqttbytes::v4::Packet, std::io::Error> {
+    pub async fn read_v4(
+        &mut self,
+        buf: &mut BytesMut,
+    ) -> Result<mqttbytes::v4::Packet, std::io::Error> {
         // loop {
         //     let required = match mqttbytes::v4::read(buf, self.max_incoming_size) {
         //         Ok(packet) => return Ok(packet),
@@ -293,11 +317,19 @@ impl Session {
         // }
         match mqttbytes::v4::read(buf, self.max_incoming_size) {
             Ok(packet) => return Ok(packet),
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e.to_string(),
+                ))
+            }
         };
     }
 
-    pub async fn read_v5(&mut self, buf : &mut BytesMut) -> Result<mqttbytes::v5::Packet, std::io::Error> {
+    pub async fn read_v5(
+        &mut self,
+        buf: &mut BytesMut,
+    ) -> Result<mqttbytes::v5::Packet, std::io::Error> {
         // loop {
         //     let required = match mqttbytes::v5::read(buf, self.max_incoming_size) {
         //         Ok(packet) => return Ok(packet),
@@ -312,7 +344,12 @@ impl Session {
 
         match mqttbytes::v5::read(buf, self.max_incoming_size) {
             Ok(packet) => return Ok(packet),
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e.to_string(),
+                ))
+            }
         };
     }
 
@@ -382,7 +419,6 @@ impl Session {
     //     Ok(len)
     // }
 
-
     // pub async fn pingresp_v4(&mut self, pkt: mqttbytes::v4::PingResp) -> Result<usize, std::io::Error> {
     //     let mut write = BytesMut::new();
     //     let len = match pkt.write(&mut write) {
@@ -404,26 +440,26 @@ impl Session {
     //     self.socket.write_all(&write[..]).await?;
     //     Ok(len)
     // }
-    
-    fn check_alive(& self) -> std::io::Result<u64> {
+
+    fn check_alive(&self) -> std::io::Result<u64> {
         let now = Instant::now();
         let elapsed = {
             if now > self.last_active_time {
                 (now - self.last_active_time).as_millis()
-            } else{
+            } else {
                 0
             }
-         } as u64;
+        } as u64;
 
-        if self.keep_alive_ms > elapsed { 
-            return Ok(self.keep_alive_ms - elapsed); 
-        } else { 
-            let error  = format!("keep alive timeout {} millis", self.keep_alive_ms);
+        if self.keep_alive_ms > elapsed {
+            return Ok(self.keep_alive_ms - elapsed);
+        } else {
+            let error = format!("keep alive timeout {} millis", self.keep_alive_ms);
             return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, error));
-        } 
+        }
     }
 
-    pub async fn run(&mut self, mut socket : TcpStream) -> std::io::Result<()> {
+    pub async fn run(&mut self, mut socket: TcpStream) -> std::io::Result<()> {
         //socket.set_nodelay(true)?; // TODO:
 
         let (mut rd, mut wr) = socket.split();
@@ -434,38 +470,42 @@ impl Session {
             let mut obuf = BytesMut::new();
 
             self.protocol = {
-                let _ = util::wait_for_packet(&mut rd, &mut ibuf, self.max_incoming_size, self.keep_alive_ms).await?;
+                let _ = util::wait_for_packet(
+                    &mut rd,
+                    &mut ibuf,
+                    self.max_incoming_size,
+                    self.keep_alive_ms,
+                )
+                .await?;
                 util::parse_protocol_level(&ibuf)?
             };
             self.last_active_time = Instant::now();
             // TODO: auth
 
             match self.protocol {
-                mqttbytes::Protocol::V4 => { 
+                mqttbytes::Protocol::V4 => {
                     let pkt = self.read_v4(&mut ibuf).await?;
                     self.process_v4(pkt, &mut obuf).await?;
-                 },
-    
-                mqttbytes::Protocol::V5 => { 
+                }
+
+                mqttbytes::Protocol::V5 => {
                     let pkt = self.read_v5(&mut ibuf).await?;
                     self.process_v5(pkt, &mut obuf).await?;
-                },
+                }
             }
             wr.write_all(&mut obuf).await?;
             self.last_active_time = Instant::now();
         }
-        
-
 
         // let _ = tokio::time::timeout(Duration::from_millis(self.keep_alive_ms), async {
         //     let mut obuf = BytesMut::new();
         //     match self.protocol {
-        //         mqttbytes::Protocol::V4 => { 
+        //         mqttbytes::Protocol::V4 => {
         //             let connack = mqttbytes::v4::ConnAck::new(mqttbytes::v4::ConnectReturnCode::Success, false);
         //             let _ = connack.write(&mut obuf);
         //          },
 
-        //         mqttbytes::Protocol::V5 => { 
+        //         mqttbytes::Protocol::V5 => {
         //             let mut connack = mqttbytes::v5::ConnAck::new(mqttbytes::v5::ConnectReturnCode::Success, false);
         //             connack.properties = Some(mqttbytes::v5::ConnAckProperties::new());
         //             let _ = connack.write(&mut obuf);
@@ -476,13 +516,13 @@ impl Session {
         // }).await??;
         // self.last_active_time = Instant::now();
 
-        loop{
+        loop {
             let rd_timeout = self.check_alive()?;
             let dead_line = Instant::now() + Duration::from_millis(rd_timeout);
-            let mut dump_buf = [0u8;1];
+            let mut dump_buf = [0u8; 1];
 
             select! {
-                
+
                 //r = socket.ready(Interest::READABLE) =>{
                 r = rd.peek(&mut dump_buf) =>{
                     match r{
@@ -496,7 +536,7 @@ impl Session {
                             return Err(e);
                         },
                     }
-                    
+
                 }
 
                 r = self.rx.recv() =>{
@@ -508,7 +548,7 @@ impl Session {
                             }
                         },
                         Err(broadcast::error::RecvError::Lagged(n)) => {
-                            info!("lagged {}", n); 
+                            info!("lagged {}", n);
                             //while let Ok(d) = self.rx.try_recv() { }
                         },
                         Err(_) => {
@@ -529,7 +569,7 @@ impl Session {
     //     let mut ibuf = BytesMut::new();
     //     let _ = util::wait_for_packet(&mut rd, &mut ibuf, self.max_incoming_size, self.keep_alive_ms).await?;
     //     let protocol = util::parse_protocol_level(&ibuf)?;
-        
+
     //     //let protocol = self.read_protocol_level(&mut ibuf).await?;
 
     //     match protocol {
@@ -548,61 +588,75 @@ impl Session {
     //     return Ok(());
     // }
 
-    fn serialize_pkt_v4(&mut self, d : Arc<hub::PubData>, obuf : &mut BytesMut){
-        let mut pub_pkt = match &*d{
-            hub::PubData::V4(pkt) => {
-                mqttbytes::v4::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
-            },
-            hub::PubData::V5(pkt) => {
-                mqttbytes::v4::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
-            },
+    fn serialize_pkt_v4(&mut self, d: Arc<hub::PubData>, obuf: &mut BytesMut) {
+        let mut pub_pkt = match &*d {
+            hub::PubData::V4(pkt) => mqttbytes::v4::Publish::from_bytes(
+                &pkt.topic,
+                mqttbytes::QoS::AtMostOnce,
+                pkt.payload.clone(),
+            ),
+            hub::PubData::V5(pkt) => mqttbytes::v4::Publish::from_bytes(
+                &pkt.topic,
+                mqttbytes::QoS::AtMostOnce,
+                pkt.payload.clone(),
+            ),
         };
         pub_pkt.pkid = self.next_packet_id();
-        let _ = pub_pkt.write(obuf);        
-        
+        let _ = pub_pkt.write(obuf);
+
         self.last_active_time = Instant::now();
     }
 
-    fn serialize_pkt_v5(&mut self, d : Arc<hub::PubData>, obuf : &mut BytesMut){
-        let mut pub_pkt = match &*d{
-            hub::PubData::V4(pkt) => {
-                mqttbytes::v5::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
-            },
-            hub::PubData::V5(pkt) => {
-                mqttbytes::v5::Publish::from_bytes(&pkt.topic, mqttbytes::QoS::AtMostOnce, pkt.payload.clone())
-            },
+    fn serialize_pkt_v5(&mut self, d: Arc<hub::PubData>, obuf: &mut BytesMut) {
+        let mut pub_pkt = match &*d {
+            hub::PubData::V4(pkt) => mqttbytes::v5::Publish::from_bytes(
+                &pkt.topic,
+                mqttbytes::QoS::AtMostOnce,
+                pkt.payload.clone(),
+            ),
+            hub::PubData::V5(pkt) => mqttbytes::v5::Publish::from_bytes(
+                &pkt.topic,
+                mqttbytes::QoS::AtMostOnce,
+                pkt.payload.clone(),
+            ),
         };
         pub_pkt.pkid = self.next_packet_id();
-        let _ = pub_pkt.write( obuf);
+        let _ = pub_pkt.write(obuf);
     }
 
-    pub async fn run_v4<'a>(&mut self, rd : &mut ReadHalf<'a>, wr : &mut WriteHalf<'a>, pubd : Option<Arc<hub::PubData>>) -> std::io::Result<()> {
+    pub async fn run_v4<'a>(
+        &mut self,
+        rd: &mut ReadHalf<'a>,
+        wr: &mut WriteHalf<'a>,
+        pubd: Option<Arc<hub::PubData>>,
+    ) -> std::io::Result<()> {
         let mut ibuf = BytesMut::with_capacity(1);
         let mut obuf = BytesMut::new();
 
         if !pubd.is_none() {
             self.serialize_pkt_v4(pubd.unwrap(), &mut obuf);
         }
-        
-        loop{
+
+        loop {
             let rd_timeout = self.check_alive()?;
-            let rd_timeout = if rd_timeout < 5000 {rd_timeout} else { 5000 };
-            let mut pkt_len  = usize::MAX;
+            let rd_timeout = if rd_timeout < 5000 { rd_timeout } else { 5000 };
+            let mut pkt_len = usize::MAX;
 
             {
-                let wait_action = util::wait_for_packet(rd, &mut ibuf, self.max_incoming_size, rd_timeout);
+                let wait_action =
+                    util::wait_for_packet(rd, &mut ibuf, self.max_incoming_size, rd_timeout);
                 tokio::pin!(wait_action);
-                
-                select!{
+
+                select! {
                     r = &mut wait_action, if rd_timeout > 0 =>{
                         match r{
-                            Ok(n) => { 
+                            Ok(n) => {
                                 pkt_len = n;
                             },
                             Err(e) => { return Err(e); },
                         }
                     }
-    
+
                     r = wr.write_buf(&mut obuf), if obuf.len() > 0 => {
                         match r{
                             Ok(_) => { },
@@ -616,7 +670,7 @@ impl Session {
                                 self.serialize_pkt_v4(d, &mut obuf);
                             },
                             Err(broadcast::error::RecvError::Lagged(n)) => {
-                                info!("lagged {}", n); 
+                                info!("lagged {}", n);
                                 //while let Ok(d) = self.rx.try_recv() { }
                             },
                             Err(_) => {
@@ -625,17 +679,16 @@ impl Session {
                         }
                     }
                 }
-
             }
-            
+
             if pkt_len == 0 {
-                if ibuf.len() == 0 && obuf.len() == 0{
+                if ibuf.len() == 0 && obuf.len() == 0 {
                     debug!("v4 no data, sleep");
                     return Ok(());
                 } else {
                     continue;
                 }
-            } else if pkt_len > 0 && pkt_len < usize::MAX{
+            } else if pkt_len > 0 && pkt_len < usize::MAX {
                 self.last_active_time = Instant::now();
                 let pkt = self.read_v4(&mut ibuf).await?;
                 self.process_v4(pkt, &mut obuf).await?;
@@ -643,19 +696,24 @@ impl Session {
         }
     }
 
-    async fn process_v4(&mut self, pkt : mqttbytes::v4::Packet, obuf : &mut BytesMut) -> std::io::Result<()>{
+    async fn process_v4(
+        &mut self,
+        pkt: mqttbytes::v4::Packet,
+        obuf: &mut BytesMut,
+    ) -> std::io::Result<()> {
         debug!("process v4 packet {:?}", pkt);
 
-        match pkt{
+        match pkt {
             mqttbytes::v4::Packet::Connect(packet) => {
-                if self.conn_pkt.client_id.is_empty(){
+                if self.conn_pkt.client_id.is_empty() {
                     debug!("got v4 first {:?}", packet);
                     self.assign_conn_pkt_v4(&packet);
                 } else {
                     warn!("error v4 {:?}", packet);
                 }
 
-                let connack = mqttbytes::v4::ConnAck::new(mqttbytes::v4::ConnectReturnCode::Success, false);
+                let connack =
+                    mqttbytes::v4::ConnAck::new(mqttbytes::v4::ConnectReturnCode::Success, false);
                 let _ = connack.write(obuf);
             }
 
@@ -665,19 +723,17 @@ impl Session {
 
             mqttbytes::v4::Packet::Publish(packet) => {
                 match packet.qos {
-                    mqttbytes::QoS::AtMostOnce => {
-
-                    },
+                    mqttbytes::QoS::AtMostOnce => {}
                     mqttbytes::QoS::AtLeastOnce => {
                         let ack = mqttbytes::v4::PubAck::new(packet.pkid);
                         let _ = ack.write(obuf);
-                    },
-                    mqttbytes::QoS::ExactlyOnce => {
-                        
-                    },
+                    }
+                    mqttbytes::QoS::ExactlyOnce => {}
                 }
-                self.hub.publish(&packet.topic, Arc::new(hub::PubData::V4(packet.clone()))).await;
-            },
+                self.hub
+                    .publish(&packet.topic, Arc::new(hub::PubData::V4(packet.clone())))
+                    .await;
+            }
 
             mqttbytes::v4::Packet::PubAck(_ack) => {
                 todo!();
@@ -696,38 +752,52 @@ impl Session {
             }
 
             mqttbytes::v4::Packet::Subscribe(subsr) => {
-                let mut return_codes:Vec<mqttbytes::v4::SubscribeReasonCode> = Vec::new();
+                let mut return_codes: Vec<mqttbytes::v4::SubscribeReasonCode> = Vec::new();
                 for val in subsr.filters.iter() {
-                    self.hub.subscribe(&val.path, self.uid, self.tx.clone()).await;
+                    self.hub
+                        .subscribe(&val.path, self.uid, self.tx.clone())
+                        .await;
                     return_codes.push(mqttbytes::v4::SubscribeReasonCode::Success(val.qos));
                 }
                 let pkt = mqttbytes::v4::SubAck::new(subsr.pkid, return_codes);
                 if let Err(e) = pkt.write(obuf) {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    ));
                 }
-            },
+            }
 
             mqttbytes::v4::Packet::Unsubscribe(unsubsr) => {
-                for topic in unsubsr.topics.iter(){
+                for topic in unsubsr.topics.iter() {
                     self.hub.unsubscribe(topic, self.uid).await;
                 }
 
                 let pkt = mqttbytes::v4::UnsubAck::new(unsubsr.pkid);
                 if let Err(e) = pkt.write(obuf) {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    ));
                 }
-            },
+            }
 
             mqttbytes::v4::Packet::PingReq => {
-                let pkt = mqttbytes::v4::PingResp{};
+                let pkt = mqttbytes::v4::PingResp {};
                 if let Err(e) = pkt.write(obuf) {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    ));
                 }
-            },
+            }
 
             mqttbytes::v4::Packet::Disconnect => {
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, "client disconnect"));
-            },
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "client disconnect",
+                ));
+            }
 
             pkt => {
                 let error = format!("recv unexpect packet [{:?}]", pkt);
@@ -735,37 +805,42 @@ impl Session {
             }
         }
 
-
         return Ok(());
     }
 
-    pub async fn run_v5<'a>( &mut self, rd : &mut ReadHalf<'a>, wr : &mut WriteHalf<'a>, pubd : Option<Arc<hub::PubData>> ) -> std::io::Result<()> {
+    pub async fn run_v5<'a>(
+        &mut self,
+        rd: &mut ReadHalf<'a>,
+        wr: &mut WriteHalf<'a>,
+        pubd: Option<Arc<hub::PubData>>,
+    ) -> std::io::Result<()> {
         let mut ibuf = BytesMut::with_capacity(1);
         let mut obuf = BytesMut::new();
-        
+
         if !pubd.is_none() {
             self.serialize_pkt_v5(pubd.unwrap(), &mut obuf);
         }
 
-        loop{
+        loop {
             let rd_timeout = self.check_alive()?;
-            let rd_timeout = if rd_timeout < 5000 {rd_timeout} else { 5000 };
-            let mut pkt_len  = usize::MAX;
+            let rd_timeout = if rd_timeout < 5000 { rd_timeout } else { 5000 };
+            let mut pkt_len = usize::MAX;
 
             {
-                let wait_action = util::wait_for_packet(rd, &mut ibuf, self.max_incoming_size, rd_timeout);
+                let wait_action =
+                    util::wait_for_packet(rd, &mut ibuf, self.max_incoming_size, rd_timeout);
                 tokio::pin!(wait_action);
-                
-                select!{
+
+                select! {
                     r = &mut wait_action, if rd_timeout > 0 =>{
                         match r{
-                            Ok(n) => { 
+                            Ok(n) => {
                                 pkt_len = n;
                             },
                             Err(e) => { return Err(e); },
                         }
                     }
-    
+
                     r = wr.write_buf(&mut obuf), if obuf.len() > 0 => {
                         match r{
                             Ok(_) => { },
@@ -779,7 +854,7 @@ impl Session {
                                 self.serialize_pkt_v5(d, &mut obuf);
                             },
                             Err(broadcast::error::RecvError::Lagged(n)) => {
-                                info!("lagged {}", n); 
+                                info!("lagged {}", n);
                                 //while let Ok(d) = self.rx.try_recv() { }
                             },
                             Err(_) => {
@@ -788,17 +863,16 @@ impl Session {
                         }
                     }
                 }
-
             }
 
             if pkt_len == 0 {
-                if ibuf.len() == 0 && obuf.len() == 0{
+                if ibuf.len() == 0 && obuf.len() == 0 {
                     debug!("v5 no data, sleep");
                     return Ok(());
                 } else {
                     continue;
                 }
-            } else if pkt_len > 0 && pkt_len < usize::MAX{
+            } else if pkt_len > 0 && pkt_len < usize::MAX {
                 self.last_active_time = Instant::now();
                 let pkt = self.read_v5(&mut ibuf).await?;
                 self.process_v5(pkt, &mut obuf).await?;
@@ -807,22 +881,31 @@ impl Session {
         // return Ok(());
     }
 
-    async fn process_v5(&mut self, pkt : mqttbytes::v5::Packet, obuf : &mut BytesMut) -> std::io::Result<()>{
+    async fn process_v5(
+        &mut self,
+        pkt: mqttbytes::v5::Packet,
+        obuf: &mut BytesMut,
+    ) -> std::io::Result<()> {
         debug!("process v5 packet {:?}", pkt);
 
-        match pkt{
+        match pkt {
             mqttbytes::v5::Packet::Connect(packet) => {
-                if self.conn_pkt.client_id.is_empty(){
+                if self.conn_pkt.client_id.is_empty() {
                     debug!("got v5 first {:?}", packet);
                     self.assign_conn_pkt_v5(&packet);
                 } else {
                     warn!("error v5 {:?}", packet);
                 }
 
-                let mut connack = mqttbytes::v5::ConnAck::new(mqttbytes::v5::ConnectReturnCode::Success, false);
+                let mut connack =
+                    mqttbytes::v5::ConnAck::new(mqttbytes::v5::ConnectReturnCode::Success, false);
                 connack.properties = Some(mqttbytes::v5::ConnAckProperties::new());
                 if packet.client_id.is_empty() {
-                    connack.properties.as_mut().unwrap().assigned_client_identifier = Some(self.conn_pkt.client_id.clone());
+                    connack
+                        .properties
+                        .as_mut()
+                        .unwrap()
+                        .assigned_client_identifier = Some(self.conn_pkt.client_id.clone());
                 }
                 let _ = connack.write(obuf);
             }
@@ -833,19 +916,17 @@ impl Session {
 
             mqttbytes::v5::Packet::Publish(packet) => {
                 match packet.qos {
-                    mqttbytes::QoS::AtMostOnce => {
-
-                    },
+                    mqttbytes::QoS::AtMostOnce => {}
                     mqttbytes::QoS::AtLeastOnce => {
                         let ack = mqttbytes::v5::PubAck::new(packet.pkid);
                         let _ = ack.write(obuf);
-                    },
-                    mqttbytes::QoS::ExactlyOnce => {
-                        
-                    },
+                    }
+                    mqttbytes::QoS::ExactlyOnce => {}
                 }
-                self.hub.publish(&packet.topic, Arc::new(hub::PubData::V5(packet.clone()))).await;
-            },
+                self.hub
+                    .publish(&packet.topic, Arc::new(hub::PubData::V5(packet.clone())))
+                    .await;
+            }
 
             mqttbytes::v5::Packet::PubAck(_ack) => {
                 todo!();
@@ -864,38 +945,52 @@ impl Session {
             }
 
             mqttbytes::v5::Packet::Subscribe(subsr) => {
-                let mut return_codes:Vec<mqttbytes::v5::SubscribeReasonCode> = Vec::new();
+                let mut return_codes: Vec<mqttbytes::v5::SubscribeReasonCode> = Vec::new();
                 for val in subsr.filters.iter() {
-                    self.hub.subscribe(&val.path, self.uid, self.tx.clone()).await;
+                    self.hub
+                        .subscribe(&val.path, self.uid, self.tx.clone())
+                        .await;
                     return_codes.push(mqttbytes::v5::SubscribeReasonCode::QoS0);
                 }
                 let pkt = mqttbytes::v5::SubAck::new(subsr.pkid, return_codes);
                 if let Err(e) = pkt.write(obuf) {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    ));
                 }
-            },
+            }
 
             mqttbytes::v5::Packet::Unsubscribe(unsubsr) => {
-                for topic in unsubsr.filters.iter(){
+                for topic in unsubsr.filters.iter() {
                     self.hub.unsubscribe(topic, self.uid).await;
                 }
 
                 let pkt = mqttbytes::v5::UnsubAck::new(unsubsr.pkid);
                 if let Err(e) = pkt.write(obuf) {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    ));
                 }
-            },
+            }
 
             mqttbytes::v5::Packet::PingReq => {
-                let pkt = mqttbytes::v5::PingResp{};
+                let pkt = mqttbytes::v5::PingResp {};
                 if let Err(e) = pkt.write(obuf) {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    ));
                 }
-            },
+            }
 
             mqttbytes::v5::Packet::Disconnect(packet) => {
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("client disconnect, {:?}", packet)));
-            },
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("client disconnect, {:?}", packet),
+                ));
+            }
 
             pkt => {
                 let error = format!("recv unexpect packet [{:?}]", pkt);
@@ -903,14 +998,11 @@ impl Session {
             }
         }
 
-
         return Ok(());
     }
-
 }
 
-
-async fn run_server(cfg:&Config) -> core::result::Result<(), Box<dyn std::error::Error>>{
+async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(&cfg.tcp_listen_addr).await?;
     info!("mqtt tcp broker listening on {}", cfg.tcp_listen_addr);
 
@@ -918,7 +1010,6 @@ async fn run_server(cfg:&Config) -> core::result::Result<(), Box<dyn std::error:
     let mut uid = 0;
 
     loop {
-
         tokio::select! {
             result = listener.accept() => {
                 match result{
@@ -936,8 +1027,8 @@ async fn run_server(cfg:&Config) -> core::result::Result<(), Box<dyn std::error:
                     Err(e) => {
                         error!("listener accept error {}", e);
                         return Err(Box::new(e));
-                    }, 
-                } 
+                    },
+                }
             }
 
             _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)), if cfg.enable_gc =>{
@@ -949,14 +1040,11 @@ async fn run_server(cfg:&Config) -> core::result::Result<(), Box<dyn std::error:
     }
 }
 
-
-
 // #[ntex::main]
 #[tokio::main]
 async fn main() {
-
     use tracing_subscriber::EnvFilter;
-    
+
     let env_filter = if std::env::var(EnvFilter::DEFAULT_ENV).is_ok() {
         EnvFilter::from_default_env()
     } else {
@@ -964,19 +1052,17 @@ async fn main() {
     };
 
     tracing_subscriber::fmt()
-    .with_target(false)
-    .with_env_filter(env_filter)
-    .init();
+        .with_target(false)
+        .with_env_filter(env_filter)
+        .init();
 
     let cfg = Config::parse();
     info!("cfg={:?}", cfg);
-    
+
     match run_server(&cfg).await {
         Ok(_) => todo!(),
         Err(e) => {
             error!("{}", e);
-        },
+        }
     }
 }
-
-

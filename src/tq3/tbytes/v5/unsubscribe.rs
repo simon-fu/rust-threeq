@@ -22,7 +22,7 @@ impl Unsubscribe {
         }
     }
 
-    pub fn len(&self, protocol:Protocol) -> usize {
+    pub fn len(&self, protocol: Protocol) -> usize {
         // Packet id + length of filters (unlike subscribe, this just a string.
         // Hence 2 is prefixed for len per filter)
         let mut len = 2 + self.filters.iter().fold(0, |s, t| 2 + s + t.len());
@@ -41,7 +41,11 @@ impl Unsubscribe {
         len
     }
 
-    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(
+        protocol: Protocol,
+        fixed_header: FixedHeader,
+        mut bytes: Bytes,
+    ) -> Result<Self, Error> {
         let variable_header_index = fixed_header.fixed_header_len;
         bytes.advance(variable_header_index);
 
@@ -67,7 +71,7 @@ impl Unsubscribe {
         Ok(unsubscribe)
     }
 
-    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
+    pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         buffer.put_u8(0xA2);
 
         // write remaining length
@@ -196,7 +200,8 @@ mod test {
 
         let fixed_header = parse_fixed_header(stream.iter()).unwrap();
         let unsubscribe_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let unsubscribe = Unsubscribe::decode(Protocol::V5, fixed_header, unsubscribe_bytes).unwrap();
+        let unsubscribe =
+            Unsubscribe::decode(Protocol::V5, fixed_header, unsubscribe_bytes).unwrap();
         assert_eq!(unsubscribe, sample());
     }
 
@@ -204,7 +209,7 @@ mod test {
     fn subscribe_encoding_works() {
         let publish = sample();
         let mut buf = BytesMut::new();
-        publish.encode(Protocol::V5,&mut buf).unwrap();
+        publish.encode(Protocol::V5, &mut buf).unwrap();
 
         println!("{:X?}", buf);
         println!("{:#04X?}", &buf[..]);
@@ -242,7 +247,7 @@ mod test {
     fn subscribe2_encoding_works() {
         let publish = sample2();
         let mut buf = BytesMut::new();
-        publish.encode(Protocol::V5,&mut buf).unwrap();
+        publish.encode(Protocol::V5, &mut buf).unwrap();
 
         // println!("{:X?}", buf);
         // println!("{:#04X?}", &buf[..]);

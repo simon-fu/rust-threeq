@@ -33,11 +33,13 @@ impl PubRec {
         }
     }
 
-    fn len(&self, protocol:Protocol) -> usize {
+    fn len(&self, protocol: Protocol) -> usize {
         let mut len = 2 + 1; // pkid + reason
 
         // If there are no properties during success, sending reason code is optional
-        if (self.reason == PubRecReason::Success && self.properties.is_none()) || protocol == Protocol::V4 {
+        if (self.reason == PubRecReason::Success && self.properties.is_none())
+            || protocol == Protocol::V4
+        {
             return 2;
         }
 
@@ -52,11 +54,15 @@ impl PubRec {
         len
     }
 
-    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(
+        protocol: Protocol,
+        fixed_header: FixedHeader,
+        mut bytes: Bytes,
+    ) -> Result<Self, Error> {
         let variable_header_index = fixed_header.fixed_header_len;
         bytes.advance(variable_header_index);
         let pkid = read_u16(&mut bytes)?;
-        if fixed_header.remaining_len == 2 || protocol == Protocol::V4{
+        if fixed_header.remaining_len == 2 || protocol == Protocol::V4 {
             return Ok(PubRec {
                 pkid,
                 reason: PubRecReason::Success,
@@ -86,14 +92,16 @@ impl PubRec {
     //     Self::decode(Protocol::V5, fixed_header, bytes)
     // }
 
-    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
+    pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         let len = self.len(protocol);
         buffer.put_u8(0x50);
         let count = write_remaining_length(buffer, len)?;
         buffer.put_u16(self.pkid);
 
         // If there are no properties during success, sending reason code is optional
-        if (self.reason == PubRecReason::Success && self.properties.is_none()) || protocol == Protocol::V4 {
+        if (self.reason == PubRecReason::Success && self.properties.is_none())
+            || protocol == Protocol::V4
+        {
             return Ok(4);
         }
 
@@ -257,7 +265,7 @@ mod test {
         let pubrec = sample();
         let mut buf = BytesMut::new();
         //pubrec.write(&mut buf).unwrap();
-        pubrec.encode(Protocol::V5,&mut buf).unwrap();
+        pubrec.encode(Protocol::V5, &mut buf).unwrap();
         assert_eq!(&buf[..], sample_bytes());
     }
 }

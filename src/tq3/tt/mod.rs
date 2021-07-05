@@ -1,6 +1,5 @@
-
-use std::slice::Iter;
 use super::tbytes;
+use std::slice::Iter;
 
 pub type Protocol = tbytes::Protocol;
 
@@ -11,7 +10,6 @@ pub type Packet = tbytes::v5::Packet;
 pub type PacketType = tbytes::PacketType;
 
 pub type Error = tbytes::Error;
-
 
 pub type Connect = tbytes::v5::Connect;
 
@@ -59,10 +57,6 @@ pub type SubscribeReasonCode = tbytes::v5::SubscribeReasonCode;
 //     return Ok(handlers.handle_connect(pkt));
 // }
 
-
-
-
-
 // pub fn decode_protocol_level(buf : & BytesMut) -> std::io::Result<tbytes::Protocol>{
 //     // Connect Packet
 //     //      byte 0: packet-type:4bit, reserved:4bit
@@ -85,7 +79,6 @@ pub type SubscribeReasonCode = tbytes::v5::SubscribeReasonCode;
 //         },
 //     };
 // }
-
 
 // pub fn decode_type(byte1: u8)-> Result<PacketType, Error>{
 //     let num = byte1 >> 4;
@@ -147,7 +140,6 @@ pub fn decode_len_len(stream: Iter<u8>) -> Result<(usize, usize), Error> {
     Ok((len_len, len))
 }
 
-
 pub fn check(mut stream: Iter<u8>, max_packet_size: usize) -> Result<FixedHeader, Error> {
     // Create fixed header if there are enough bytes in the stream
     // to frame full packet
@@ -177,9 +169,6 @@ pub fn check(mut stream: Iter<u8>, max_packet_size: usize) -> Result<FixedHeader
 
     Ok(FixedHeader::new(*byte1, len_len, len))
 }
-
-
-
 
 // pub mod v4;
 

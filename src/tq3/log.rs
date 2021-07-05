@@ -1,19 +1,18 @@
-
-pub mod tracing_subscriber{
+pub mod tracing_subscriber {
     // - 在log里打印node name
     //   https://github.com/tokio-rs/tracing/issues/1039
     //   https://github.com/paritytech/substrate/pull/7328/files#diff-2aff70c0d7f47bf8bc46d493812750120e424ca014752c1ba8b25c03a759a064
-    // 
+    //
 
-    use tracing_subscriber::EnvFilter;
-    use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields};
-    use tracing_subscriber::registry::LookupSpan;
-    use tracing::Subscriber;
-    use tracing_subscriber::fmt::time::ChronoUtc;
-    use tracing_subscriber::fmt::time::FormatTime;
     use ansi_term::Colour;
     use ansi_term::Style;
     use tracing::Level;
+    use tracing::Subscriber;
+    use tracing_subscriber::fmt::time::ChronoUtc;
+    use tracing_subscriber::fmt::time::FormatTime;
+    use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields};
+    use tracing_subscriber::registry::LookupSpan;
+    use tracing_subscriber::EnvFilter;
 
     #[derive(Debug, Clone)]
     pub struct MyFormatter<T = ChronoUtc> {
@@ -29,11 +28,9 @@ pub mod tracing_subscriber{
         }
     }
 
-    impl  MyFormatter {
+    impl MyFormatter {
         pub fn with_timer<T2>(self, timer: T2) -> MyFormatter<T2> {
-            MyFormatter {
-                timer
-            }
+            MyFormatter { timer }
         }
     }
 
@@ -49,8 +46,6 @@ pub mod tracing_subscriber{
             writer: &mut dyn std::fmt::Write,
             event: &tracing::Event<'_>,
         ) -> std::fmt::Result {
-
-            
             #[cfg(feature = "tracing-log")]
             let normalized_meta = event.normalized_metadata();
             #[cfg(feature = "tracing-log")]
@@ -66,11 +61,11 @@ pub mod tracing_subscriber{
             }
             //self.format_timestamp(writer)?;
 
-            match *meta.level(){
+            match *meta.level() {
                 Level::TRACE => write!(writer, "{}", Colour::Purple.paint("T"))?,
                 Level::DEBUG => write!(writer, "{}", Colour::Blue.paint("D"))?,
-                Level::INFO =>  write!(writer, "{}", Colour::Green.paint("I"))?,
-                Level::WARN =>  write!(writer, "{}", Colour::Yellow.paint("W"))?,
+                Level::INFO => write!(writer, "{}", Colour::Green.paint("I"))?,
+                Level::WARN => write!(writer, "{}", Colour::Yellow.paint("W"))?,
                 Level::ERROR => write!(writer, "{}", Colour::Red.paint("E"))?,
             }
             write!(writer, " ")?;
@@ -78,7 +73,7 @@ pub mod tracing_subscriber{
             {
                 // FmtCtx::new(&ctx, event.parent(), self.ansi)
                 let span_id = event.parent();
-                
+
                 let bold = Style::new().bold();
                 let mut seen = false;
 
@@ -114,7 +109,6 @@ pub mod tracing_subscriber{
     }
 
     pub fn init() {
-    
         let env_filter = if std::env::var(EnvFilter::DEFAULT_ENV).is_ok() {
             EnvFilter::from_default_env()
         } else {
@@ -122,14 +116,9 @@ pub mod tracing_subscriber{
         };
 
         tracing_subscriber::fmt()
-
             .with_target(false)
-    
             .with_env_filter(env_filter)
-    
             .event_format(MyFormatter::default())
-
             .init();
     }
 }
-

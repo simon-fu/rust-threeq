@@ -260,9 +260,10 @@ impl Disconnect {
         }
     }
 
-    fn len(&self, protocol:Protocol) -> usize {
+    fn len(&self, protocol: Protocol) -> usize {
         if (self.reason_code == DisconnectReasonCode::NormalDisconnection
-            && self.properties.is_none()) || protocol == Protocol::V4
+            && self.properties.is_none())
+            || protocol == Protocol::V4
         {
             return 2; // Packet type + 0x00
         }
@@ -286,7 +287,11 @@ impl Disconnect {
         length
     }
 
-    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(
+        protocol: Protocol,
+        fixed_header: FixedHeader,
+        mut bytes: Bytes,
+    ) -> Result<Self, Error> {
         let packet_type = fixed_header.byte1 >> 4;
 
         if packet_type != PacketType::Disconnect as u8 {
@@ -295,20 +300,18 @@ impl Disconnect {
 
         if protocol == Protocol::V4 {
             if fixed_header.fixed_header_len != 2 {
-                return Err(Error::MalformedPacket); 
+                return Err(Error::MalformedPacket);
             } else {
                 return Ok(Self {
                     reason_code: DisconnectReasonCode::NormalDisconnection,
                     properties: None,
-                }); 
+                });
             }
         }
 
         let flags = fixed_header.byte1 & 0b0000_1111;
 
         bytes.advance(fixed_header.fixed_header_len);
-
-        
 
         if flags != 0x00 {
             return Err(Error::MalformedPacket);
@@ -328,7 +331,7 @@ impl Disconnect {
         Ok(disconnect)
     }
 
-    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
+    pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         buffer.put_u8(0xE0);
 
         let length = self.len(protocol);

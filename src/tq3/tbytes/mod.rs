@@ -4,9 +4,9 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use core::fmt::{self, Display, Formatter};
 use std::slice::Iter;
 
+mod topic;
 pub mod v4;
 pub mod v5;
-mod topic;
 
 pub use topic::*;
 
@@ -112,7 +112,7 @@ impl FixedHeader {
         }
     }
 
-    pub fn get_type_byte(&self)->u8{
+    pub fn get_type_byte(&self) -> u8 {
         self.byte1 >> 4
     }
 

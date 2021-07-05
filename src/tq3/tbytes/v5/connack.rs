@@ -48,12 +48,12 @@ impl ConnAck {
         }
     }
 
-    fn len(&self, protocol:Protocol) -> usize {
+    fn len(&self, protocol: Protocol) -> usize {
         let mut len = 1  // session present
                         + 1; // code
 
         match protocol {
-            Protocol::V4 => {},
+            Protocol::V4 => {}
             Protocol::V5 => {
                 if let Some(properties) = &self.properties {
                     let properties_len = properties.len();
@@ -62,13 +62,17 @@ impl ConnAck {
                 } else {
                     len += 1;
                 }
-            },
+            }
         }
 
         len
     }
 
-    pub fn decode(protocol:Protocol, fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Self, Error> {
+    pub fn decode(
+        protocol: Protocol,
+        fixed_header: FixedHeader,
+        mut bytes: Bytes,
+    ) -> Result<Self, Error> {
         let variable_header_index = fixed_header.fixed_header_len;
         bytes.advance(variable_header_index);
 
@@ -93,8 +97,8 @@ impl ConnAck {
     //     Self::decode(Protocol::V5, fixed_header, bytes)
     // }
 
-    pub fn encode(&self, protocol:Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
-        let len = self.len(protocol);  // TODO: aaa 根据protocol判断长度
+    pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
+        let len = self.len(protocol); // TODO: aaa 根据protocol判断长度
         buffer.put_u8(0x20);
 
         let count = write_remaining_length(buffer, len)?;
@@ -102,14 +106,14 @@ impl ConnAck {
         buffer.put_u8(self.code as u8);
 
         match protocol {
-            Protocol::V4 => {},
+            Protocol::V4 => {}
             Protocol::V5 => {
                 if let Some(properties) = &self.properties {
                     properties.write(buffer)?;
                 } else {
                     write_remaining_length(buffer, 0)?;
                 }
-            },
+            }
         }
 
         Ok(1 + count + len)
