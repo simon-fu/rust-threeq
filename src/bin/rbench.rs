@@ -574,7 +574,7 @@ async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error
 #[tokio::main]
 async fn main() {
     tq3::log::tracing_subscriber::init();
-
+a
     let cfg = Config::parse();
     info!("cfg={:?}", cfg);
 
