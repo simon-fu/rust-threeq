@@ -10,6 +10,21 @@ pub type Packet = tbytes::v5::Packet;
 pub type PacketType = tbytes::PacketType;
 
 pub type Error = tbytes::Error;
+// #[derive(Debug, thiserror::Error)]
+// pub enum Error {
+//     #[error("Packet parsing error: {0:?}")]
+//     Packet(tbytes::Error),
+
+//     #[error("I/O error: {0}")]
+//     Io(#[from] std::io::Error),
+// }
+
+// impl From<tbytes::Error> for Error {
+//     fn from(error: tbytes::Error) -> Self {
+//         Error::Packet(error)
+//     }
+// }
+
 
 pub type Connect = tbytes::v5::Connect;
 
@@ -170,6 +185,4 @@ pub fn check(mut stream: Iter<u8>, max_packet_size: usize) -> Result<FixedHeader
     Ok(FixedHeader::new(*byte1, len_len, len))
 }
 
-// pub mod v4;
-
-// pub mod v5;
+pub mod client;

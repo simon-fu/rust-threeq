@@ -1,10 +1,12 @@
 /*
 TODO:
-- support QoS1, Qos2
+- support QoS1, Qos2, QoS match
 - support cluster
 - support in-flight window
+- support publish topic alias
 - support redis
 - support kafka
+- support websocket over mqtt and pure websocket
 - support local disk storage
 */
 
@@ -67,39 +69,62 @@ struct Config {
     enable_gc: bool,
 }
 
-#[derive(Debug)]
+// #[derive(Debug, thiserror::Error)]
+// pub enum Error {
+//     #[error("Timeout:{0}")]
+//     Timeout(#[from] Elapsed),
+
+//     #[error("Packet parsing error: {0}")]
+//     TtError(tt::Error),
+
+//     #[error("I/O error: {0}")]
+//     Io(#[from] std::io::Error),
+// }
+
+#[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    IoError(std::io::Error),
-    TtError(tt::Error),
-    ElapsedError(tokio::time::error::Elapsed),
-    PackettypeError(num_enum::TryFromPrimitiveError<tt::PacketType>),
-    ExpectConnectPacket,
+    #[error("I/O error: {0}")]
+    IoError(#[from] std::io::Error),
+
+    #[error("Packet parsing error: {0}")]
+    TtError(#[from] tt::Error),
+
+    #[error("Timeout:{0}")]
+    ElapsedError(#[from] tokio::time::error::Elapsed),
+
+    #[error("packet type error: {0}")]
+    PackettypeError(#[from] num_enum::TryFromPrimitiveError<tt::PacketType>),
+
+    #[error("expect connect packet but got :{0:?}")]
+    ExpectConnectPacket(tt::PacketType),
+
+    #[error("unexpect packet type: {0:?}")]
     UnexpectPacket(tt::PacketType),
 }
 
-impl From<std::io::Error> for AppError {
-    fn from(error: std::io::Error) -> Self {
-        AppError::IoError(error)
-    }
-}
+// impl From<std::io::Error> for AppError {
+//     fn from(error: std::io::Error) -> Self {
+//         AppError::IoError(error)
+//     }
+// }
 
-impl From<tt::Error> for AppError {
-    fn from(error: tt::Error) -> Self {
-        AppError::TtError(error)
-    }
-}
+// impl From<tt::Error> for AppError {
+//     fn from(error: tt::Error) -> Self {
+//         AppError::TtError(error)
+//     }
+// }
 
-impl From<tokio::time::error::Elapsed> for AppError {
-    fn from(error: tokio::time::error::Elapsed) -> Self {
-        AppError::ElapsedError(error)
-    }
-}
+// impl From<tokio::time::error::Elapsed> for AppError {
+//     fn from(error: tokio::time::error::Elapsed) -> Self {
+//         AppError::ElapsedError(error)
+//     }
+// }
 
-impl From<num_enum::TryFromPrimitiveError<tt::PacketType>> for AppError {
-    fn from(error: num_enum::TryFromPrimitiveError<tt::PacketType>) -> Self {
-        AppError::PackettypeError(error)
-    }
-}
+// impl From<num_enum::TryFromPrimitiveError<tt::PacketType>> for AppError {
+//     fn from(error: num_enum::TryFromPrimitiveError<tt::PacketType>) -> Self {
+//         AppError::PackettypeError(error)
+//     }
+// }
 
 impl AppError {
     fn broken_pipe<E>(reason: E) -> Self
@@ -463,7 +488,7 @@ impl Session {
                     let packet_type = tt::PacketType::try_from(h.get_type_byte())?;
 
                     if !self.is_got_connect() && !matches!(packet_type, tt::PacketType::Connect) {
-                        return Err(AppError::ExpectConnectPacket);
+                        return Err(AppError::ExpectConnectPacket(packet_type));
                     }
 
                     self.last_active_time = Instant::now();

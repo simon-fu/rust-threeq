@@ -344,7 +344,7 @@ impl fmt::Debug for Publish {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Topic = {}, Qos = {:?}, Retain = {}, Pkid = {:?}, Payload Size = {}",
+            "Publish {{ Topic = {}, Qos = {:?}, Retain = {}, Pkid = {:?}, Payload Size = {} }}",
             self.topic,
             self.qos,
             self.retain,

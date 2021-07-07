@@ -26,7 +26,7 @@ impl Connect {
     pub fn new<S: Into<String>>(id: S) -> Connect {
         Connect {
             protocol: Protocol::V5,
-            keep_alive: 10,
+            keep_alive: 30,
             properties: None,
             client_id: id.into(),
             clean_session: true,

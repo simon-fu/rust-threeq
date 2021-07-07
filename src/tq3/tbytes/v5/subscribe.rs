@@ -348,7 +348,7 @@ impl fmt::Debug for Subscribe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Filters = {:?}, Packet id = {:?}",
+            "Subscribe {{ Filters = {:?}, Packet id = {:?} }}",
             self.filters, self.pkid
         )
     }
