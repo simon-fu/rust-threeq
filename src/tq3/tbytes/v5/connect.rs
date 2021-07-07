@@ -51,15 +51,17 @@ impl Connect {
                               + 1            // connect flags
                               + 2; // keep alive
 
-        match &self.properties {
-            Some(properties) => {
-                let properties_len = properties.len();
-                let properties_len_len = len_len(properties_len);
-                len += properties_len_len + properties_len;
-            }
-            None => {
-                // just 1 byte representing 0 len
-                len += 1;
+        if self.protocol == Protocol::V5 {
+            match &self.properties {
+                Some(properties) => {
+                    let properties_len = properties.len();
+                    let properties_len_len = len_len(properties_len);
+                    len += properties_len_len + properties_len;
+                }
+                None => {
+                    // just 1 byte representing 0 len
+                    len += 1;
+                }
             }
         }
 
@@ -143,12 +145,14 @@ impl Connect {
         buffer.put_u8(connect_flags);
         buffer.put_u16(self.keep_alive);
 
-        match &self.properties {
-            Some(properties) => properties.write(buffer)?,
-            None => {
-                write_remaining_length(buffer, 0)?;
-            }
-        };
+        if self.protocol == Protocol::V5 {
+            match &self.properties {
+                Some(properties) => properties.write(buffer)?,
+                None => {
+                    write_remaining_length(buffer, 0)?;
+                }
+            };
+        }
 
         write_mqtt_string(buffer, &self.client_id);
 
