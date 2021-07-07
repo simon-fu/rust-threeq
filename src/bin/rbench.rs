@@ -1,11 +1,8 @@
-use std::{fmt::Debug};
-
+use std::fmt::Debug;
 
 use clap::Clap;
 use rust_threeq::tq3::{self, tt};
 use tracing::{error, info};
-
-
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
 #[derive(Clap, Debug, Default)]
@@ -27,14 +24,14 @@ struct Config {
     enable_gc: bool,
 }
 
-async fn recv_loop(mut receiver : tt::client::Receiver) -> Result<(), tt::client::Error>{
-    loop{
+async fn recv_loop(mut receiver: tt::client::Receiver) -> Result<(), tt::client::Error> {
+    loop {
         let event = receiver.recv().await?;
         info!("event {:?}", event);
     }
 }
 
-async fn bench() -> Result<(), tt::client::Error>{
+async fn bench() -> Result<(), tt::client::Error> {
     // let addr = "broker.emqx.io:1883";
 
     let addr = "95kih0.cn1.mqtt.chat:1883";
@@ -52,7 +49,6 @@ async fn bench() -> Result<(), tt::client::Error>{
     // let password = "YWMtBeUx0NfpEeuG9u0EJlumBegrzF8zZk2Wp8GS3pF-orBnUI9QkdAR66aBgQQ44eDgAwMAAAF6UbAwbwBPGgCZG2uBHDrvCLM7SH4UTlW3piJwMgU5bfGByO8pgLz77Q";
     // let client_id = "dev111@1PGUGY";
 
-
     let (mut sender, receiver) = tt::client::make_connection(addr).await?;
 
     let task = tokio::spawn(async move {
@@ -67,31 +63,56 @@ async fn bench() -> Result<(), tt::client::Error>{
     pkt.set_login(username, password);
     let conn_ack = sender.connect(pkt).await?;
     info!("conn_ack {:?}", conn_ack);
-    
-    let sub_ack = sender.subscribe(tt::Subscribe::new("t1/t2/#", tt::QoS::ExactlyOnce)).await?;
+
+    let sub_ack = sender
+        .subscribe(tt::Subscribe::new("t1/t2/#", tt::QoS::ExactlyOnce))
+        .await?;
     info!("sub_ack {:?}", sub_ack);
 
-    let _r = sender.publish(tt::Publish::new("t1/t2/qos0", tt::QoS::AtMostOnce, vec![00u8, 22u8])).await?;
+    let _r = sender
+        .publish(tt::Publish::new(
+            "t1/t2/qos0",
+            tt::QoS::AtMostOnce,
+            vec![00u8, 22u8],
+        ))
+        .await?;
     info!("publish qos0 ok");
 
-    let _r = sender.publish(tt::Publish::new("t1/t2/qos1", tt::QoS::AtLeastOnce, vec![11u8, 22u8])).await?;
+    let _r = sender
+        .publish(tt::Publish::new(
+            "t1/t2/qos1",
+            tt::QoS::AtLeastOnce,
+            vec![11u8, 22u8],
+        ))
+        .await?;
     info!("publish qos1 ok");
 
-    let _r = sender.publish(tt::Publish::new("t1/t2/qos2", tt::QoS::ExactlyOnce, vec![22u8, 22u8])).await?;
+    let _r = sender
+        .publish(tt::Publish::new(
+            "t1/t2/qos2",
+            tt::QoS::ExactlyOnce,
+            vec![22u8, 22u8],
+        ))
+        .await?;
     info!("publish qos2 ok");
 
     let unsub_ack = sender.unsubscribe(tt::Unsubscribe::new("t1/t2/#")).await?;
     info!("unsub_ack {:?}", unsub_ack);
 
-    let _r = sender.publish(tt::Publish::new("t1/t2/qos0", tt::QoS::AtMostOnce, vec![00u8, 22u8])).await?;
-    info!("publish qos1 ok"); 
+    let _r = sender
+        .publish(tt::Publish::new(
+            "t1/t2/qos0",
+            tt::QoS::AtMostOnce,
+            vec![00u8, 22u8],
+        ))
+        .await?;
+    info!("publish qos1 ok");
 
     let _ = task.await;
 
     let _ = sender.disconnect(tt::Disconnect::new()).await?;
     Ok(())
 }
-
 
 #[tokio::main]
 async fn main() {
@@ -100,9 +121,12 @@ async fn main() {
     //let cfg = Config::parse();
     //debug!("cfg={:?}", cfg);
 
-    match bench().await{
-        Ok(_) => { info!("bench result ok"); },
-        Err(e) => { error!("bench result error [{}]", e); },
+    match bench().await {
+        Ok(_) => {
+            info!("bench result ok");
+        }
+        Err(e) => {
+            error!("bench result error [{}]", e);
+        }
     }
-
 }

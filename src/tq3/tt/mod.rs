@@ -25,7 +25,6 @@ pub type Error = tbytes::Error;
 //     }
 // }
 
-
 pub type Connect = tbytes::v5::Connect;
 
 pub type ConnAck = tbytes::v5::ConnAck;
