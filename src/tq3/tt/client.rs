@@ -168,6 +168,7 @@ impl Default for State {
 
 #[derive(Debug)]
 struct Session {
+    max_osize: usize,
     tx: mpsc::Sender<Response>,
     state: State,
     pktid: u16,
@@ -179,8 +180,9 @@ struct Session {
 }
 
 impl Session {
-    fn new(tx: mpsc::Sender<Response>) -> Self {
+    fn new(tx: mpsc::Sender<Response>, now:Instant) -> Self {
         Session {
+            max_osize : 16*1024,
             tx,
             state: State::Ready,
             pktid: 0,
@@ -188,7 +190,7 @@ impl Session {
             conn_pkt: None,
             inflight: Default::default(),
             qos2_rsp: Default::default(),
-            last_active_time: Instant::now(),
+            last_active_time: now,
         }
     }
 
@@ -198,15 +200,6 @@ impl Session {
             self.pktid = 1;
         }
         self.pktid
-    }
-
-    fn get_next_ping_time(&self, hold: bool) -> Instant {
-        if let Some(pkt) = &self.conn_pkt {
-            if !hold {
-                return self.last_active_time + Duration::from_secs(pkt.keep_alive as u64);
-            }
-        }
-        self.last_active_time + Duration::from_secs(999999999)
     }
 
     fn get_protocol(&self) -> tt::Protocol {
@@ -498,8 +491,6 @@ impl Session {
 
         trace_input!(tt::Packet::PingResp);
 
-        self.last_active_time = Instant::now();
-
         Ok(())
     }
 
@@ -661,10 +652,10 @@ impl Session {
         Ok((self.next_pktid(), true))
     }
 
-    async fn exec_req(&mut self, mut req: Request, obuf: &mut BytesMut) -> Result<(), Error> {
+    async fn exec_req(&mut self, now:Instant, mut req: Request, obuf: &mut BytesMut) -> Result<(), Error> {
         let r = match &mut req.req {
             ReqItem::Packet(pkt0) => {
-                self.last_active_time = Instant::now();
+                self.last_active_time = now;
                 match pkt0 {
                     tt::Packet::Connect(pkt) => self.exec_connect(pkt, obuf).await,
                     tt::Packet::Subscribe(pkt) => self.exec_subscribe(pkt, obuf).await,
@@ -686,6 +677,37 @@ impl Session {
             Err(e) => Err(e),
         }
     }
+
+    // fn get_next_ping_time(&self) -> Instant {
+    //     if let Some(pkt) = &self.conn_pkt {
+    //         self.last_active_time + Duration::from_secs(pkt.keep_alive as u64)
+    //     } else {
+    //         self.last_active_time + Duration::from_secs(999999999)
+    //     }
+        
+    // }
+
+    fn next(&mut self, now:Instant, obuf: &mut BytesMut) -> Result<(bool, bool, Instant), Error>{
+        let hold_req = self.state == State::Disconnecting || obuf.len() >= self.max_osize;
+        let hold_read = obuf.len() >= self.max_osize;
+        let next_time =  if let Some(pkt) = &self.conn_pkt {
+            self.last_active_time + Duration::from_secs(pkt.keep_alive as u64)
+        } else {
+            self.last_active_time + Duration::from_secs(999999999)
+        };
+
+        //trace!("hold_req {}, hold_read {}", hold_req, hold_read);
+
+        if now >= next_time {
+            if !hold_read {
+                tt::PingReq {}.write(obuf)?;
+                trace_output!(tt::Packet::PingReq);
+                self.last_active_time = now.clone();
+                return self.next(now, obuf);
+            }
+        }
+        Ok((hold_req, hold_read, next_time))
+    }
 }
 
 async fn task_entry(
@@ -693,25 +715,13 @@ async fn task_entry(
     mut req_rx: mpsc::Receiver<Request>,
     session: &mut Session,
 ) -> Result<(), Error> {
-    let max_osize = 16 * 1024;
-
+    
     let (mut rd, mut wr) = socket.split();
     let mut ibuf = bytes::BytesMut::with_capacity(64);
     let mut obuf = bytes::BytesMut::with_capacity(64);
 
     loop {
-        let hold_req = session.state == State::Disconnecting || obuf.len() >= max_osize;
-        let hold_read = obuf.len() >= max_osize;
-        let next_time = session.get_next_ping_time(hold_read);
-
-        //trace!("hold_req {}, hold_read {}", hold_req, hold_read);
-
-        if Instant::now() >= next_time {
-            tt::PingReq {}.write(&mut obuf)?;
-            trace_output!(tt::Packet::PingReq);
-            session.last_active_time = Instant::now();
-            continue;
-        }
+        let (hold_req, hold_read, next_time) = session.next(Instant::now(), &mut obuf)?;
 
         tokio::select! {
             r = wr.write_buf(&mut obuf), if !obuf.is_empty() => {
@@ -736,7 +746,7 @@ async fn task_entry(
             r = req_rx.recv(), if !hold_req => {
                 match r{
                     Some(req)=>{
-                        session.exec_req(req, &mut obuf).await?;
+                        session.exec_req(Instant::now(), req, &mut obuf).await?;
                     }
                     None => {
                         debug!("no sender, closed");
@@ -745,7 +755,7 @@ async fn task_entry(
                 }
             }
 
-            _ = tokio::time::sleep_until(next_time) => {
+            _ = tokio::time::sleep_until(next_time), if !hold_read => {
 
             }
         }
@@ -762,7 +772,7 @@ pub async fn make_connection(addr: &str) -> Result<(Sender, Receiver), Error> {
     let (ev_tx, ev_rx) = mpsc::channel(64);
 
     tokio::spawn(async move {
-        let mut session = Session::new(ev_tx);
+        let mut session = Session::new(ev_tx, Instant::now());
         if let Err(e) = task_entry(socket, req_rx, &mut session).await {
             debug!("task finished with error [{:?}]", e);
             let _ = session.rsp_error(None, e).await;
