@@ -180,9 +180,9 @@ struct Session {
 }
 
 impl Session {
-    fn new(tx: mpsc::Sender<Response>, now:Instant) -> Self {
+    fn new(tx: mpsc::Sender<Response>, now: Instant) -> Self {
         Session {
-            max_osize : 16*1024,
+            max_osize: 16 * 1024,
             tx,
             state: State::Ready,
             pktid: 0,
@@ -652,7 +652,12 @@ impl Session {
         Ok((self.next_pktid(), true))
     }
 
-    async fn exec_req(&mut self, now:Instant, mut req: Request, obuf: &mut BytesMut) -> Result<(), Error> {
+    async fn exec_req(
+        &mut self,
+        now: Instant,
+        mut req: Request,
+        obuf: &mut BytesMut,
+    ) -> Result<(), Error> {
         let r = match &mut req.req {
             ReqItem::Packet(pkt0) => {
                 self.last_active_time = now;
@@ -684,13 +689,13 @@ impl Session {
     //     } else {
     //         self.last_active_time + Duration::from_secs(999999999)
     //     }
-        
+
     // }
 
-    fn next(&mut self, now:Instant, obuf: &mut BytesMut) -> Result<(bool, bool, Instant), Error>{
+    fn next(&mut self, now: Instant, obuf: &mut BytesMut) -> Result<(bool, bool, Instant), Error> {
         let hold_req = self.state == State::Disconnecting || obuf.len() >= self.max_osize;
         let hold_read = obuf.len() >= self.max_osize;
-        let next_time =  if let Some(pkt) = &self.conn_pkt {
+        let next_time = if let Some(pkt) = &self.conn_pkt {
             self.last_active_time + Duration::from_secs(pkt.keep_alive as u64)
         } else {
             self.last_active_time + Duration::from_secs(999999999)
@@ -715,7 +720,6 @@ async fn task_entry(
     mut req_rx: mpsc::Receiver<Request>,
     session: &mut Session,
 ) -> Result<(), Error> {
-    
     let (mut rd, mut wr) = socket.split();
     let mut ibuf = bytes::BytesMut::with_capacity(64);
     let mut obuf = bytes::BytesMut::with_capacity(64);
