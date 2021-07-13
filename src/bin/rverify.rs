@@ -6,57 +6,17 @@
   - unsubscribe, and receive timeout
 
 √ two concurrent client with the same client id
-  - user 1:
-    - connect with client id c1
-    - subscribe
-  - user 2
-    - connect with client id c1
-  - user 1 got broken(V4) or disconnect(V5)
+
+√ will message
+
+√ retain message
+
+√ clean session basic
 
 - ping interval
 
-- clean session basic
-  - user 1
-    - connect with clean-session=0
-    - subscribe
-    - publish, and receive
-    - disconnect
-  - user 2 (op1)
-    - connect with clean-session=1
-    - publish m1
-    - disconnect
-  - user 1
-    - connect with clean-session=0
-    - receive m1
-    - disconnect
-  - user 2 (same as op1)
-  - user 1
-    - connect with clean-session=1
-    - receive m1 timeout
-    - disconnect
-
 - offline message limit
-
-- will message
-  - user 1: connect and subscribe
-  - user 2: connect with will m1 and shutdown socket
-  - user 1: receive m1
-  - user 3: connect and subscribe, recevie timeout
-
-- retain message
-  - user 1: connect and publish m1 with retain
-  - user 2: connect and subscribe and recevie m1 with retain
-  - user 1: publish m2 without retain
-  - user 2: receive m2 without retain
-  - user 1: publish m3 with retain
-  - user 2: receive m3 with retain
-  - user 2: disconnect
-  - user 1: publish m4, m5, m6, all with retain
-  - user 2: connect and recevie m6, with retain
-  - user 2: disconnect
-  - user 1: publish m7(without retain), m8(with retain), m9(without retain)
-  - user 2: connect and recevie m8, with retain
- */
+*/
 
 use std::time::Duration;
 
@@ -73,13 +33,6 @@ extern crate serde_derive;
 #[derive(Clap, Debug, Default)]
 #[clap(name = "threeq verify", author, about, version)]
 struct CmdArgs {
-    // #[clap(
-    //     short = 'a',
-    //     long = "address",
-    //     default_value = "127.0.0.1:1883",
-    //     long_about = "broker address, ip:port."
-    // )]
-    // address: String,
     #[clap(short = 'c', long = "config", long_about = "config file.")]
     config: Option<String>,
 }
@@ -179,14 +132,14 @@ fn init_conn_pkt(account: &Account, protocol: tt::Protocol) -> tt::Connect {
     pkt
 }
 
-fn check_publish(rpkt: &tt::Publish, pkt: &tt::Publish) -> Result<(), String> {
+fn check_publish(rpkt: &tt::Publish, pkt: &tt::Publish, retain: bool) -> Result<(), String> {
     if pkt.qos != rpkt.qos {
         Err("diff qos".to_string())
     } else if pkt.topic != rpkt.topic {
         Err("diff topic".to_string())
     } else if pkt.payload != rpkt.payload {
         Err("diff payload".to_string())
-    } else if pkt.retain != rpkt.retain {
+    } else if pkt.retain != retain {
         Err("diff retain".to_string())
     } else if pkt.dup != rpkt.dup {
         Err("diff dup".to_string())
@@ -357,12 +310,16 @@ impl<'a> Connector<'a> {
     }
 
     async fn recv_publish1(&mut self, rpkt: &tt::Publish) -> Result<(), Error> {
+        return self.recv_publish2(&rpkt, rpkt.retain).await;
+    }
+
+    async fn recv_publish2(&mut self, rpkt: &tt::Publish, retain: bool) -> Result<(), Error> {
         let ev = self.recv().await?;
 
         match &ev {
             tt::client::Event::Packet(pkt) => match pkt {
                 tt::Packet::Publish(pkt) => {
-                    let r = check_publish(rpkt, pkt);
+                    let r = check_publish(rpkt, pkt, retain);
                     return match r {
                         Ok(_) => Ok(()),
                         Err(s) => {
@@ -660,30 +617,6 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     let m9 = Message::new(args).with_payload(vec![0x09u8; 9]);
     let m0 = Message::new(args).with_payload(vec![]).with_retain();
 
-    // {
-    //     let mut client2=  Connector::new( args, &user2);
-
-    //     client2.connect().await?;
-
-    //     client2.subscribe().await?;
-
-    //     let mut client1=  Connector::new( args, &user1);
-
-    //     client1.connect().await?;
-
-    //     client1.publish1(m3.pkt.clone()).await?;
-
-    //     client1.disconnect().await?;
-
-    //     client2.recv_publish1(&m3.pkt).await?;
-
-    //     client2.disconnect().await?;
-
-    //     if !client2.args.addr.is_empty(){
-    //         return Ok(());
-    //     }
-    // }
-
     {
         let mut client1 = Connector::new(args, &user1);
 
@@ -713,6 +646,7 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
         .recv_publish1(&m1.pkt)
         .instrument(new_span("user3 recving retain msg1"))
         .await?;
+    client3.disconnect().await?;
 
     // - user 1: connect and publish m3 with retain
     let mut client1 = Connector::new(args, &user1);
@@ -720,13 +654,17 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     client1.publish1(m3.pkt.clone()).await?;
     client1.disconnect().await?;
 
-    // - user 2: receive m3 with retain
+    // - user 2: receive m3 without retain
     // - user 3: receive m3 with retain
     // - user 3: disconnect
     client2
-        .recv_publish1(&m3.pkt)
-        .instrument(new_span("user2 recving retain msg3"))
+        .recv_publish2(&m3.pkt, false)
+        .instrument(new_span("user2 recving msg3"))
         .await?;
+
+    let mut client3 = Connector::new(args, &user3);
+    client3.connect("client3").await?;
+    client3.subscribe().await?;
     client3
         .recv_publish1(&m3.pkt)
         .instrument(new_span("user3 recving retain msg3"))
@@ -735,28 +673,31 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     drop(client3);
 
     // - user 1: publish m4, m5, m6, all with retain
+    let mut client1 = Connector::new(args, &user1);
+    client1.connect("client1").await?;
     client1.publish1(m4.pkt.clone()).await?;
     client1.publish1(m5.pkt.clone()).await?;
     client1.publish1(m6.pkt.clone()).await?;
 
-    // - user 2: receive m4, m5, m6, with retain
+    // - user 2: receive m4, m5, m6, without retain
     client2
-        .recv_publish1(&m4.pkt)
+        .recv_publish2(&m4.pkt, false)
         .instrument(new_span("user2 recving msg4"))
         .await?;
     client2
-        .recv_publish1(&m5.pkt)
+        .recv_publish2(&m5.pkt, false)
         .instrument(new_span("user2 recving msg5"))
         .await?;
     client2
-        .recv_publish1(&m6.pkt)
+        .recv_publish2(&m6.pkt, false)
         .instrument(new_span("user2 recving msg6"))
         .await?;
 
-    // - user 3: connect and recevie m6, with retain
+    // - user 3: connect and subscribe, recevie m6, with retain
     // - user 3: disconnect
     let mut client3 = Connector::new(args, &user3);
     client3.connect("client3").await?;
+    client3.subscribe().await?;
     client3
         .recv_publish1(&m6.pkt)
         .instrument(new_span("user3 recving retain msg6"))
@@ -768,13 +709,13 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     client1.publish1(m8.pkt.clone()).await?;
     client1.publish1(m9.pkt.clone()).await?;
 
-    // - user 2: receive m7(without retain), m8(with retain), m9(without retain)
+    // - user 2: receive m7, m8, m9, all without retain
     client2
         .recv_publish1(&m7.pkt)
         .instrument(new_span("user2 recving msg7"))
         .await?;
     client2
-        .recv_publish1(&m8.pkt)
+        .recv_publish2(&m8.pkt, false)
         .instrument(new_span("user2 recving msg8"))
         .await?;
     client2
@@ -785,9 +726,10 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     // - user 3: connect and recevie m8, with retain
     let mut client3 = Connector::new(args, &user3);
     client3.connect("client3").await?;
+    client3.subscribe().await?;
     client3
         .recv_publish1(&m8.pkt)
-        .instrument(new_span("user3 recving msg8"))
+        .instrument(new_span("user3 recving retain msg8"))
         .await?;
 
     // clean up
@@ -881,10 +823,6 @@ async fn main() {
         cfg = c.try_into().unwrap();
         debug!("loaded config file [{}]", fname);
     }
-
-    // if cfg.address.is_none() {
-    //     cfg.address = Some(args.address);
-    // }
 
     debug!("cfg=[{:?}]", cfg);
 
