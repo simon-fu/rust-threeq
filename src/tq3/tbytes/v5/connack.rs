@@ -80,13 +80,21 @@ impl ConnAck {
         let return_code = read_u8(&mut bytes)?;
 
         let session_present = (flags & 0x01) == 1;
-        let code = connect_return(return_code)?;
-        let connack = ConnAck {
-            session_present,
-            code,
-            properties: match protocol {
-                Protocol::V4 => None,
-                Protocol::V5 => ConnAckProperties::extract(&mut bytes)?,
+        
+        let connack = match protocol {
+            Protocol::V4 => {
+                ConnAck {
+                    session_present,
+                    code: connect_return_v4(return_code)?,
+                    properties: None,
+                }
+            },
+            Protocol::V5 => {
+                ConnAck {
+                    session_present,
+                    code: connect_return_v5(return_code)?,
+                    properties: ConnAckProperties::extract(&mut bytes)?,
+                }
             },
         };
 
@@ -470,7 +478,7 @@ impl ConnAckProperties {
 }
 
 /// Connection return code type
-fn connect_return(num: u8) -> Result<ConnectReturnCode, Error> {
+fn connect_return_v5(num: u8) -> Result<ConnectReturnCode, Error> {
     let code = match num {
         0 => ConnectReturnCode::Success,
         128 => ConnectReturnCode::UnspecifiedError,
@@ -499,6 +507,19 @@ fn connect_return(num: u8) -> Result<ConnectReturnCode, Error> {
 
     Ok(code)
 }
+
+fn connect_return_v4(num: u8) -> Result<ConnectReturnCode, Error> {
+    match num {
+        0 => Ok(ConnectReturnCode::Success),
+        1 => Ok(ConnectReturnCode::ProtocolError),
+        2 => Ok(ConnectReturnCode::ClientIdentifierNotValid),
+        3 => Ok(ConnectReturnCode::ServerUnavailable),
+        4 => Ok(ConnectReturnCode::BadUserNamePassword),
+        5 => Ok(ConnectReturnCode::NotAuthorized),
+        num => Err(Error::InvalidConnectReturnCode(num)),
+    }
+}
+
 
 #[cfg(test)]
 mod test {
