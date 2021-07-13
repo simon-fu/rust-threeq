@@ -69,7 +69,7 @@ impl Connect {
 
         // last will len
         if let Some(last_will) = &self.last_will {
-            len += last_will.len();
+            len += last_will.len(self.protocol);
         }
 
         // username and password len
@@ -108,7 +108,7 @@ impl Connect {
         };
 
         let client_id = read_mqtt_string(&mut bytes)?;
-        let last_will = LastWill::read(connect_flags, &mut bytes)?;
+        let last_will = LastWill::read(protocol, connect_flags, &mut bytes)?;
         let login = Login::read(connect_flags, &mut bytes)?;
 
         let connect = Connect {
@@ -157,7 +157,7 @@ impl Connect {
         write_mqtt_string(buffer, &self.client_id);
 
         if let Some(last_will) = &self.last_will {
-            connect_flags |= last_will.write(buffer)?;
+            connect_flags |= last_will.write(self.protocol, buffer)?;
         }
 
         if let Some(login) = &self.login {
@@ -196,34 +196,41 @@ impl LastWill {
         }
     }
 
-    fn len(&self) -> usize {
+    fn len(&self, protocol: Protocol) -> usize {
         let mut len = 0;
 
-        match &self.properties {
-            Some(properties) => {
-                let properties_len = properties.len();
-                let properties_len_len = len_len(properties_len);
-                len += properties_len_len + properties_len;
-            }
-            None => {
-                // just 1 byte representing 0 len
-                len += 1;
-            }
-        };
+        if protocol == Protocol::V5 {
+            match &self.properties {
+                Some(properties) => {
+                    let properties_len = properties.len();
+                    let properties_len_len = len_len(properties_len);
+                    len += properties_len_len + properties_len;
+                }
+                None => {
+                    // just 1 byte representing 0 len
+                    len += 1;
+                }
+            };
+        }
 
         len += 2 + self.topic.len() + 2 + self.message.len();
         len
     }
 
-    fn read(connect_flags: u8, mut bytes: &mut Bytes) -> Result<Option<LastWill>, Error> {
+    fn read(protocol: Protocol, connect_flags: u8, mut bytes: &mut Bytes) -> Result<Option<LastWill>, Error> {
         let last_will = match connect_flags & 0b100 {
             0 if (connect_flags & 0b0011_1000) != 0 => {
                 return Err(Error::IncorrectPacketFormat);
             }
             0 => None,
             _ => {
+                
                 // Properties in variable header
-                let properties = WillProperties::read(&mut bytes)?;
+                let properties = if protocol == Protocol::V5 {
+                    WillProperties::read(&mut bytes)?   
+                } else {
+                    None
+                };
 
                 let will_topic = read_mqtt_string(&mut bytes)?;
                 let will_message = read_mqtt_bytes(&mut bytes)?;
@@ -241,7 +248,7 @@ impl LastWill {
         Ok(last_will)
     }
 
-    fn write(&self, buffer: &mut BytesMut) -> Result<u8, Error> {
+    fn write(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<u8, Error> {
         let mut connect_flags = 0;
 
         connect_flags |= 0x04 | (self.qos as u8) << 3;
@@ -249,12 +256,14 @@ impl LastWill {
             connect_flags |= 0x20;
         }
 
-        match &self.properties {
-            Some(properties) => properties.write(buffer)?,
-            None => {
-                write_remaining_length(buffer, 0)?;
-            }
-        };
+        if protocol == Protocol::V5 {
+            match &self.properties {
+                Some(properties) => properties.write(buffer)?,
+                None => {
+                    write_remaining_length(buffer, 0)?;
+                }
+            };
+        }
 
         write_mqtt_string(buffer, &self.topic);
         write_mqtt_bytes(buffer, &self.message);
@@ -505,7 +514,7 @@ pub struct ConnectProperties {
 }
 
 impl ConnectProperties {
-    fn _new() -> ConnectProperties {
+    pub fn new() -> ConnectProperties {
         ConnectProperties {
             session_expiry_interval: None,
             receive_maximum: None,
