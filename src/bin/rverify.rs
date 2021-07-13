@@ -216,6 +216,7 @@ fn new_span(s: &str) -> Span {
     return span;
 }
 
+#[derive(Debug)]
 struct Connector<'a>{
     args: &'a VArgs, 
     pkt: tt::Connect, 
@@ -258,9 +259,14 @@ impl<'a> Connector<'a> {
         self
     }
 
+    #[instrument(skip(self), name="", level = "debug")]
+    async fn connect000(&mut self, s: &str) -> Result<(), Error> {
+        Ok(())
+    }
 
-    async fn connect(&mut self) -> Result<(), Error> {
-        let mut client = tt::client::make_connection(&self.args.addr).await?;
+    async fn connect(&mut self, name: &str) -> Result<(), Error> {
+        // let name = format!("{:p}", &self);
+        let mut client = tt::client::make_connection(name, &self.args.addr).await?;
         let ack = client.sender.connect(self.pkt.clone()).await?;
         if ack.code != tt::ConnectReturnCode::Success {
             return Err(Error::Generic(format!("{:?}", ack)));
@@ -400,6 +406,7 @@ impl Message {
     }
 }
 
+#[derive(Debug)]
 struct VArgs{
     addr: String,
     protocol: tt::Protocol,
@@ -416,7 +423,7 @@ async fn clean_up(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Err
     
     let mut client=  Connector::new(args, &account);
 
-    client.connect().await?;
+    client.connect("client1").await?;
 
     let m1 = Message::new(args).with_payload(vec![]).with_retain();
     client.publish1(m1.pkt).await?;
@@ -428,14 +435,14 @@ async fn clean_up(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Err
     Ok(())
 }
 
-#[instrument(skip(args, accounts), level = "debug")]
+#[instrument(skip(args, accounts), name="basic", level = "debug")]
 async fn verify_basic(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
 
     let account = accounts.next().unwrap();
     
     let mut client=  Connector::new(args, &account);
 
-    client.connect().await?;
+    client.connect("client").await?;
     
     client.subscribe().await?;
 
@@ -456,20 +463,20 @@ async fn verify_basic(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(),
     Ok(())
 }
 
-#[instrument(skip(args, accounts), level = "debug")]
+#[instrument(skip(args, accounts), name="same_client_id", level = "debug")]
 async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error>{
     let account = accounts.next().unwrap();
     
     let mut client1=  Connector::new(args, &account);
     
-    client1.connect().await?;
+    client1.connect("client1").await?;
 
     client1.subscribe().await?;
 
 
     let mut client2 = Connector::new(args, &account);
 
-    client2.connect().await?;
+    client2.connect("client2").await?;
 
     let r = client1.recv().instrument(new_span("client1 waiting for disconnect")).await;
 
@@ -497,7 +504,7 @@ async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> R
     }
 }
 
-#[instrument(skip(args, accounts), level = "debug")]
+#[instrument(skip(args, accounts), name="clean_session", level = "debug")]
 async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error>{
     /* 
     - clean session basic
@@ -532,7 +539,7 @@ async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Re
             .with_clean_session(false)
             .with_session_expire(expired_seconds);
 
-        client1.connect().await?;
+        client1.connect("client1").await?;
     
         client1.subscribe().await?;
 
@@ -546,7 +553,7 @@ async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Re
     // user2 connect and send message
     let mut client2=  Connector::new(args, &user2);
 
-    client2.connect().await?;
+    client2.connect("client2").await?;
 
     client2.publish().await?;
 
@@ -557,7 +564,7 @@ async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Re
             .with_clean_session(false)
             .with_session_expire(expired_seconds);
 
-        client1.connect().await?;
+        client1.connect("client1").await?;
     
         client1.recv_publish0().instrument(new_span("recving offline")).await?;
 
@@ -572,7 +579,7 @@ async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Re
     {
         let mut client1=  Connector::new( args, &user1);
 
-        client1.connect().await?;
+        client1.connect("client1").await?;
     
         client1.recv_timeout().instrument(new_span("recv nothing")).await?;
 
@@ -584,7 +591,7 @@ async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Re
     Ok(())
 }
 
-#[instrument(skip(args, accounts), level = "debug")]
+#[instrument(skip(args, accounts), name="retain", level = "debug")]
 async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error>{
     /*
         - retain message
@@ -650,7 +657,7 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     {
         let mut client1=  Connector::new( args, &user1);
         
-        client1.connect().await?;
+        client1.connect("client1").await?;
 
         client1.publish1(m1.pkt.clone()).await?;
 
@@ -661,21 +668,21 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
 
     // // - user 2: connect and subscribe and recevie m1 with retain
     let mut client2=  Connector::new( args, &user2);
-    client2.connect().await?;
+    client2.connect("client2").await?;
     client2.subscribe().await?;
     client2.recv_publish1(&m1.pkt).instrument(new_span("user2 recving retain msg1")).await?;
     
 
     //  - user 3: connect and subscribe and recevie m1 with retain
     let mut client3=  Connector::new( args, &user3);
-    client3.connect().await?;
+    client3.connect("client3").await?;
     client3.subscribe().await?;
     client3.recv_publish1(&m1.pkt).instrument(new_span("user3 recving retain msg1")).await?;
 
 
     // - user 1: connect and publish m3 with retain
     let mut client1=  Connector::new( args, &user1);
-    client1.connect().await?;
+    client1.connect("client1").await?;
     client1.publish1(m3.pkt.clone()).await?;
     client1.disconnect().await?;
 
@@ -701,7 +708,7 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     // - user 3: connect and recevie m6, with retain
     // - user 3: disconnect
     let mut client3=  Connector::new( args, &user3);
-    client3.connect().await?;
+    client3.connect("client3").await?;
     client3.recv_publish1(&m6.pkt).instrument(new_span("user3 recving retain msg6")).await?;
     client3.disconnect().await?;
     
@@ -717,7 +724,7 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
 
     // - user 3: connect and recevie m8, with retain
     let mut client3=  Connector::new( args, &user3);
-    client3.connect().await?;
+    client3.connect("client3").await?;
     client3.recv_publish1(&m8.pkt).instrument(new_span("user3 recving msg8")).await?;
 
     // clean up
@@ -729,7 +736,7 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     Ok(())
 }
 
-#[instrument(skip(args, accounts), level = "debug")]
+#[instrument(skip(args, accounts), name="will", level = "debug")]
 async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error>{
     // - will message
     // - user 1: connect and subscribe
@@ -742,17 +749,17 @@ async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), 
     let user3 = accounts.next().unwrap();
 
     let mut client1=  Connector::new( args, &user1);
-    client1.connect().await?;
+    client1.connect("client1").await?;
     client1.subscribe().await?;
 
     let mut client2=  Connector::new( args, &user2 ).with_will(false);
-    client2.connect().await?;
+    client2.connect("client2").await?;
     client2.shutdown().await?;
 
     client1.recv_publish0().await?;
 
     let mut client3=  Connector::new( args, &user3);
-    client3.connect().await?;
+    client3.connect("client3").await?;
     client3.subscribe().await?;
     client3.recv_timeout().await?;
     client3.disconnect().await?;

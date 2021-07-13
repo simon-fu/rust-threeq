@@ -97,6 +97,7 @@ pub enum Event {
 
 #[derive(Debug)]
 enum Response {
+    Connected,
     Event(Event),
     Error(Error),
 }
@@ -115,6 +116,7 @@ async fn recv_ev(rx: &mut ResponseRX) -> Result<Event, Error> {
     match recv_rsp(rx).await? {
         Response::Event(ev) => Ok(ev),
         Response::Error(e) => Err(e),
+        Response::Connected => panic!("never reach heare"),
     }
 }
 
@@ -811,29 +813,58 @@ async fn task_entry(
     Ok(())
 }
 
-pub async fn make_connection(addr: &str) -> Result<Client, Error> {
-    trace!("connecting to [{}]...", addr);
-    let socket = match TcpStream::connect(addr).await{
-        Ok(h) => h,
-        Err(e) => {
-            let e = Error::Generic(format!("unable to connect {}, {}", addr, e.to_string()));
-            debug!("{}", e.to_string());
-            return Err(e);
-        },
-    };
-    trace!("connected [{}]", addr);
+pub async fn make_connection(name: &str, addr: &str) -> Result<Client, Error> {
+    // trace!("connecting to [{}]...", addr);
+    // let socket = match TcpStream::connect(addr).await{
+    //     Ok(h) => h,
+    //     Err(e) => {
+    //         let e = Error::Generic(format!("unable to connect {}, {}", addr, e.to_string()));
+    //         debug!("{}", e.to_string());
+    //         return Err(e);
+    //     },
+    // };
+    // trace!("connected [{}]", addr);
 
     let (req_tx, req_rx) = mpsc::channel(64);
-    let (ev_tx, ev_rx) = mpsc::channel(64);
+    let (ev_tx, mut ev_rx) = mpsc::channel(64);
+    let addr = addr.to_string();
+    let fut = async move {
 
-    tokio::spawn(async move {
+        trace!("connecting to [{}]...", addr);
+        let socket = match TcpStream::connect(&addr).await{
+            Ok(h) => h,
+            Err(e) => {
+                let e = Error::Generic(format!("unable to connect {}, {}", &addr, e.to_string()));
+                debug!("{}", e.to_string());
+                let _r = ev_tx.send(Response::Error(e)).await;
+                return;
+                //return Err(e);
+            },
+        };
+        trace!("connected [{}]", addr);
+        let _r = ev_tx.send(Response::Connected).await;
+
         let mut session = Session::new(ev_tx, Instant::now());
         if let Err(e) = task_entry(socket, req_rx, &mut session).await {
             debug!("<{:p}> task finished with error [{:?}]", &session, e);
             let _ = session.response_inflight_error(&format!("{:?}", e)).await;
             let _ = session.rsp_error(None, e).await;
         }
-    });
+    };
+
+    if !name.is_empty() {
+        let span = tracing::span!(tracing::Level::DEBUG, "", c=name);
+        tokio::spawn(tracing::Instrument::instrument(fut, span));
+    } else {
+        tokio::spawn(fut);
+    }
+
+    let rsp = ev_rx.recv().await.ok_or_else(|| Error::Finished)?;
+    match rsp {
+        Response::Connected => {},
+        Response::Event(_) => { panic!("never reach heare");},
+        Response::Error(e) => {return Err(e);},
+    };
 
     Ok(
         Client{
@@ -843,6 +874,7 @@ pub async fn make_connection(addr: &str) -> Result<Client, Error> {
     )
 }
 
+#[derive(Debug)]
 pub struct Client{
     pub sender: Sender,
     pub receiver: Receiver,
@@ -854,6 +886,7 @@ impl Client {
     }
 }
 
+#[derive(Debug)]
 pub struct Receiver {
     rx: mpsc::Receiver<Response>,
 }
@@ -864,10 +897,12 @@ impl Receiver {
         match rsp {
             Response::Event(ev) => Ok(ev),
             Response::Error(e) => Err(e),
+            Response::Connected => panic!("never reach heare"),
         }
     }
 }
 
+#[derive(Debug)]
 pub struct Sender {
     tx: mpsc::Sender<Request>,
 }
