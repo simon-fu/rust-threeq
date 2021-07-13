@@ -217,17 +217,20 @@ impl LastWill {
         len
     }
 
-    fn read(protocol: Protocol, connect_flags: u8, mut bytes: &mut Bytes) -> Result<Option<LastWill>, Error> {
+    fn read(
+        protocol: Protocol,
+        connect_flags: u8,
+        mut bytes: &mut Bytes,
+    ) -> Result<Option<LastWill>, Error> {
         let last_will = match connect_flags & 0b100 {
             0 if (connect_flags & 0b0011_1000) != 0 => {
                 return Err(Error::IncorrectPacketFormat);
             }
             0 => None,
             _ => {
-                
                 // Properties in variable header
                 let properties = if protocol == Protocol::V5 {
-                    WillProperties::read(&mut bytes)?   
+                    WillProperties::read(&mut bytes)?
                 } else {
                     None
                 };

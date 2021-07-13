@@ -80,21 +80,17 @@ impl ConnAck {
         let return_code = read_u8(&mut bytes)?;
 
         let session_present = (flags & 0x01) == 1;
-        
+
         let connack = match protocol {
-            Protocol::V4 => {
-                ConnAck {
-                    session_present,
-                    code: connect_return_v4(return_code)?,
-                    properties: None,
-                }
+            Protocol::V4 => ConnAck {
+                session_present,
+                code: connect_return_v4(return_code)?,
+                properties: None,
             },
-            Protocol::V5 => {
-                ConnAck {
-                    session_present,
-                    code: connect_return_v5(return_code)?,
-                    properties: ConnAckProperties::extract(&mut bytes)?,
-                }
+            Protocol::V5 => ConnAck {
+                session_present,
+                code: connect_return_v5(return_code)?,
+                properties: ConnAckProperties::extract(&mut bytes)?,
             },
         };
 
@@ -519,7 +515,6 @@ fn connect_return_v4(num: u8) -> Result<ConnectReturnCode, Error> {
         num => Err(Error::InvalidConnectReturnCode(num)),
     }
 }
-
 
 #[cfg(test)]
 mod test {

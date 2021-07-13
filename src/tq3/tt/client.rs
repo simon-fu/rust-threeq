@@ -395,7 +395,10 @@ impl Session {
                 return self.rsp_packet(req.tx, tt::Packet::PubAck(pkt)).await;
             }
         }
-        Err(Error::Generic(format!("req {:?} but got puback {:?}", req.req, pkt)))
+        Err(Error::Generic(format!(
+            "req {:?} but got puback {:?}",
+            req.req, pkt
+        )))
     }
 
     async fn handle_pubrec(
@@ -595,17 +598,15 @@ impl Session {
     }
 
     async fn response_disconnect(&mut self, reason: &str) -> Result<(), Error> {
-
         match self.inflight.remove(&self.pktid) {
-            Some(req) => self.rsp_event(req.tx,  Event::Closed(reason.into())).await?,
-            None => {},
+            Some(req) => self.rsp_event(req.tx, Event::Closed(reason.into())).await?,
+            None => {}
         };
 
         self.rsp_event(None, Event::Closed(reason.into())).await
     }
 
     async fn response_inflight_error(&mut self, reason: &str) -> Result<(), Error> {
-
         let mut txx: Vec<Option<ResponseTX>> = Default::default();
         for (_, v) in self.inflight.drain() {
             txx.push(v.tx);
@@ -618,7 +619,6 @@ impl Session {
 
         Ok(())
     }
-
 
     async fn exec_connect(
         &mut self,
@@ -719,7 +719,7 @@ impl Session {
             }
             ReqItem::Shutdown => {
                 return Ok(true);
-            } 
+            }
         };
 
         match r {
@@ -829,9 +829,8 @@ pub async fn make_connection(name: &str, addr: &str) -> Result<Client, Error> {
     let (ev_tx, mut ev_rx) = mpsc::channel(64);
     let addr = addr.to_string();
     let fut = async move {
-
         trace!("connecting to [{}]...", addr);
-        let socket = match TcpStream::connect(&addr).await{
+        let socket = match TcpStream::connect(&addr).await {
             Ok(h) => h,
             Err(e) => {
                 let e = Error::Generic(format!("unable to connect {}, {}", &addr, e.to_string()));
@@ -839,7 +838,7 @@ pub async fn make_connection(name: &str, addr: &str) -> Result<Client, Error> {
                 let _r = ev_tx.send(Response::Error(e)).await;
                 return;
                 //return Err(e);
-            },
+            }
         };
         trace!("connected [{}]", addr);
         let _r = ev_tx.send(Response::Connected).await;
@@ -853,7 +852,7 @@ pub async fn make_connection(name: &str, addr: &str) -> Result<Client, Error> {
     };
 
     if !name.is_empty() {
-        let span = tracing::span!(tracing::Level::DEBUG, "", c=name);
+        let span = tracing::span!(tracing::Level::DEBUG, "", c = name);
         tokio::spawn(tracing::Instrument::instrument(fut, span));
     } else {
         tokio::spawn(fut);
@@ -861,21 +860,23 @@ pub async fn make_connection(name: &str, addr: &str) -> Result<Client, Error> {
 
     let rsp = ev_rx.recv().await.ok_or_else(|| Error::Finished)?;
     match rsp {
-        Response::Connected => {},
-        Response::Event(_) => { panic!("never reach heare");},
-        Response::Error(e) => {return Err(e);},
+        Response::Connected => {}
+        Response::Event(_) => {
+            panic!("never reach heare");
+        }
+        Response::Error(e) => {
+            return Err(e);
+        }
     };
 
-    Ok(
-        Client{
-            sender:Sender { tx: req_tx }, 
-            receiver: Receiver { rx: ev_rx } 
-        }
-    )
+    Ok(Client {
+        sender: Sender { tx: req_tx },
+        receiver: Receiver { rx: ev_rx },
+    })
 }
 
 #[derive(Debug)]
-pub struct Client{
+pub struct Client {
     pub sender: Sender,
     pub receiver: Receiver,
 }

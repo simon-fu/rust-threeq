@@ -136,5 +136,4 @@ pub mod tracing_subscriber {
             .event_format(MyFormatter::default())
             .init();
     }
-
 }

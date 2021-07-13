@@ -1,13 +1,12 @@
-
 /*
 √ basic
   - connect
   - subscribe
-  - publish m1, and receive m1 
+  - publish m1, and receive m1
   - unsubscribe, and receive timeout
 
 √ two concurrent client with the same client id
-  - user 1: 
+  - user 1:
     - connect with client id c1
     - subscribe
   - user 2
@@ -19,8 +18,8 @@
 - clean session basic
   - user 1
     - connect with clean-session=0
-    - subscribe 
-    - publish, and receive 
+    - subscribe
+    - publish, and receive
     - disconnect
   - user 2 (op1)
     - connect with clean-session=1
@@ -59,7 +58,6 @@
   - user 2: connect and recevie m8, with retain
  */
 
-
 use std::time::Duration;
 
 use clap::Clap;
@@ -67,7 +65,7 @@ use rand::{distributions::Alphanumeric, Rng};
 use rust_threeq::tq3;
 use rust_threeq::tq3::tt;
 use tokio::time::timeout;
-use tracing::{Instrument, Span, debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, Instrument, Span};
 
 #[macro_use]
 extern crate serde_derive;
@@ -82,15 +80,9 @@ struct CmdArgs {
     //     long_about = "broker address, ip:port."
     // )]
     // address: String,
-
-    #[clap(
-        short = 'c',
-        long = "config",
-        long_about = "config file."
-    )]
+    #[clap(short = 'c', long = "config", long_about = "config file.")]
     config: Option<String>,
 }
-
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 struct Account {
@@ -106,7 +98,6 @@ struct Config {
     timeout_seconds: u64,
 }
 
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
@@ -118,27 +109,26 @@ pub enum Error {
 
 const STAR_VAR: &str = "${*}";
 
-
-struct AccountIter<'a>{
-    iter : std::slice::Iter<'a, Account>,
-    star : Option<&'a Account>,
+struct AccountIter<'a> {
+    iter: std::slice::Iter<'a, Account>,
+    star: Option<&'a Account>,
 }
 
 impl AccountIter<'_> {
-    fn new(accounts: &Vec<Account>) -> AccountIter{
-        let mut o = AccountIter{
+    fn new(accounts: &Vec<Account>) -> AccountIter {
+        let mut o = AccountIter {
             iter: accounts.iter(),
             star: None,
         };
 
         for v in accounts {
             if let Some(s) = &v.client_id {
-                if s.contains(STAR_VAR){
+                if s.contains(STAR_VAR) {
                     o.star = Some(v);
                     break;
                 }
             }
-        };
+        }
 
         o
     }
@@ -169,30 +159,27 @@ impl<'a> Iterator for AccountIter<'a> {
     }
 }
 
-
-
-fn rand_client_id() -> String{    
+fn rand_client_id() -> String {
     rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(8)
-            .map(char::from)
-            .collect()
+        .sample_iter(&Alphanumeric)
+        .take(8)
+        .map(char::from)
+        .collect()
 }
 
-
-fn init_conn_pkt(account: &Account, protocol: tt::Protocol) -> tt::Connect{
+fn init_conn_pkt(account: &Account, protocol: tt::Protocol) -> tt::Connect {
     let mut pkt = tt::Connect::new(account.client_id.as_deref().unwrap_or(&rand_client_id()));
     if account.user.is_some() || account.password.is_some() {
         pkt.set_login(
-            account.user.as_deref().unwrap_or(""), 
-            account.password.as_deref().unwrap_or("")
+            account.user.as_deref().unwrap_or(""),
+            account.password.as_deref().unwrap_or(""),
         );
     }
     pkt.protocol = protocol;
     pkt
 }
 
-fn check_publish(rpkt : &tt::Publish, pkt : &tt::Publish) -> Result<(), String>{
+fn check_publish(rpkt: &tt::Publish, pkt: &tt::Publish) -> Result<(), String> {
     if pkt.qos != rpkt.qos {
         Err("diff qos".to_string())
     } else if pkt.topic != rpkt.topic {
@@ -210,56 +197,68 @@ fn check_publish(rpkt : &tt::Publish, pkt : &tt::Publish) -> Result<(), String>{
     }
 }
 
-
 fn new_span(s: &str) -> Span {
-    let span = tracing::span!(tracing::Level::DEBUG, "", s=s);
+    let span = tracing::span!(tracing::Level::DEBUG, "", s = s);
     return span;
 }
 
 #[derive(Debug)]
-struct Connector<'a>{
-    args: &'a VArgs, 
-    pkt: tt::Connect, 
+struct Connector<'a> {
+    args: &'a VArgs,
+    pkt: tt::Connect,
     client: Option<tt::client::Client>,
 }
 
 impl<'a> Connector<'a> {
-    fn new(args: &'a VArgs, account:&'a Account,) -> Self {
-        Self{
+    fn new(args: &'a VArgs, account: &'a Account) -> Self {
+        Self {
             args,
             pkt: init_conn_pkt(account, args.protocol),
             client: None,
         }
     }
 
-    fn with_clean_session(mut self, b:bool) -> Self{
+    fn with_clean_session(mut self, b: bool) -> Self {
         self.pkt.clean_session = b;
         self
     }
 
-    fn with_session_expire(mut self, seconds:u32) -> Self{
+    fn with_session_expire(mut self, seconds: u32) -> Self {
         if seconds > 0 {
             if self.pkt.properties.is_none() {
                 self.pkt.properties = Some(tt::ConnectProperties::new());
             }
-            self.pkt.properties.as_mut().unwrap().session_expiry_interval = Some(seconds);
+            self.pkt
+                .properties
+                .as_mut()
+                .unwrap()
+                .session_expiry_interval = Some(seconds);
             // self.pkt.clean_session = false;
         } else {
             if self.pkt.properties.is_some() {
-                self.pkt.properties.as_mut().unwrap().session_expiry_interval = None;
+                self.pkt
+                    .properties
+                    .as_mut()
+                    .unwrap()
+                    .session_expiry_interval = None;
             }
             // self.pkt.clean_session = true;
         }
-        
+
         self
     }
 
-    fn with_will(mut self, retain:bool) -> Self{
-        self.pkt.last_will = Some(tt::LastWill::new(&self.args.topic, &*self.args.payload, self.args.qos, retain));
+    fn with_will(mut self, retain: bool) -> Self {
+        self.pkt.last_will = Some(tt::LastWill::new(
+            &self.args.topic,
+            &*self.args.payload,
+            self.args.qos,
+            retain,
+        ));
         self
     }
 
-    #[instrument(skip(self), name="", level = "debug")]
+    #[instrument(skip(self), name = "", level = "debug")]
     async fn connect000(&mut self, s: &str) -> Result<(), Error> {
         Ok(())
     }
@@ -277,7 +276,10 @@ impl<'a> Connector<'a> {
 
     async fn subscribe(&mut self) -> Result<(), Error> {
         let client = self.client.as_mut().unwrap();
-        let ack = client.sender.subscribe(tt::Subscribe::new(&self.args.topic, self.args.qos)).await?;
+        let ack = client
+            .sender
+            .subscribe(tt::Subscribe::new(&self.args.topic, self.args.qos))
+            .await?;
         for reason in &ack.return_codes {
             if !reason.is_success() {
                 return Err(Error::Generic(format!("{:?}", ack)));
@@ -288,9 +290,12 @@ impl<'a> Connector<'a> {
 
     async fn unsubscribe(&mut self) -> Result<(), Error> {
         let client = self.client.as_mut().unwrap();
-        let ack = client.sender.unsubscribe(tt::Unsubscribe::new(self.args.topic.clone())).await?;
+        let ack = client
+            .sender
+            .unsubscribe(tt::Unsubscribe::new(self.args.topic.clone()))
+            .await?;
         for reason in &ack.reasons {
-            if *reason != tt::UnsubAckReason::Success{
+            if *reason != tt::UnsubAckReason::Success {
                 let str = format!("unsubscribe fail, {:?}", ack);
                 error!("{}", str);
                 return Err(Error::Generic(str));
@@ -299,13 +304,20 @@ impl<'a> Connector<'a> {
         return Ok(());
     }
 
-    async fn publish(&mut self) -> Result<(), Error>{
+    async fn publish(&mut self) -> Result<(), Error> {
         let client = self.client.as_mut().unwrap();
-        let _r = client.sender.publish(tt::Publish::new(&self.args.topic, self.args.qos, self.args.payload.clone())).await?;
+        let _r = client
+            .sender
+            .publish(tt::Publish::new(
+                &self.args.topic,
+                self.args.qos,
+                self.args.payload.clone(),
+            ))
+            .await?;
         Ok(())
     }
 
-    async fn publish1(&mut self, pkt: tt::Publish) -> Result<(), Error>{
+    async fn publish1(&mut self, pkt: tt::Publish) -> Result<(), Error> {
         let client = self.client.as_mut().unwrap();
         let _r = client.sender.publish(pkt).await?;
         Ok(())
@@ -314,14 +326,12 @@ impl<'a> Connector<'a> {
     async fn recv(&mut self) -> Result<tt::client::Event, tt::client::Error> {
         let client = self.client.as_mut().unwrap();
         let r = timeout(self.args.timeout, client.receiver.recv()).await;
-        let ev = match r{
-            Ok(r) => {
-                Ok(r)
-            },
+        let ev = match r {
+            Ok(r) => Ok(r),
             Err(e) => {
                 error!("recv timeout");
                 Err(tt::client::Error::Timeout(e))
-            },
+            }
         }?;
         return ev;
     }
@@ -332,41 +342,40 @@ impl<'a> Connector<'a> {
             Ok(_r) => {
                 error!("recv timeout");
                 Err(Error::Generic(format!("recv timeout")))
-            },
-            Err(_) => {
-                Ok(())
-            },
+            }
+            Err(_) => Ok(()),
         };
     }
 
     async fn recv_publish0(&mut self) -> Result<(), Error> {
-        let rpkt = tt::Publish::new(self.args.topic.clone(), self.args.qos, self.args.payload.clone());
+        let rpkt = tt::Publish::new(
+            self.args.topic.clone(),
+            self.args.qos,
+            self.args.payload.clone(),
+        );
         return self.recv_publish1(&rpkt).await;
     }
 
-    async fn recv_publish1 (&mut self, rpkt : &tt::Publish) -> Result<(), Error> {
+    async fn recv_publish1(&mut self, rpkt: &tt::Publish) -> Result<(), Error> {
         let ev = self.recv().await?;
-    
+
         match &ev {
-            tt::client::Event::Packet(pkt) => {
-                match pkt {
-                    tt::Packet::Publish(pkt) => {
-                        let r = check_publish(rpkt, pkt);
-                        return match r{
-                            Ok(_) => Ok(()),
-                            Err(s) => {
-                                let str = format!("expect recv {:?}, but {:?}, reason {}", rpkt, pkt, s);
-                                error!("{}", str);
-                                Err(Error::Generic(str))
-                            },
-                        };
-                    },
-                    _ => {},
+            tt::client::Event::Packet(pkt) => match pkt {
+                tt::Packet::Publish(pkt) => {
+                    let r = check_publish(rpkt, pkt);
+                    return match r {
+                        Ok(_) => Ok(()),
+                        Err(s) => {
+                            let str =
+                                format!("expect recv {:?}, but {:?}, reason {}", rpkt, pkt, s);
+                            error!("{}", str);
+                            Err(Error::Generic(str))
+                        }
+                    };
                 }
+                _ => {}
             },
-            tt::client::Event::Closed(_) => {
-    
-            },
+            tt::client::Event::Closed(_) => {}
         }
         return Err(Error::Generic(format!("expect publish but got {:?}", ev)));
     }
@@ -384,30 +393,30 @@ impl<'a> Connector<'a> {
     }
 }
 
-struct Message{
-    pkt: tt::Publish,   
+struct Message {
+    pkt: tt::Publish,
 }
 
 impl Message {
     fn new(args: &VArgs) -> Self {
-        Self{
-            pkt: tt::Publish::new(args.topic.clone(), args.qos, args.payload.clone())
+        Self {
+            pkt: tt::Publish::new(args.topic.clone(), args.qos, args.payload.clone()),
         }
     }
 
-    fn with_payload(mut self, payload: Vec<u8>) -> Self{
+    fn with_payload(mut self, payload: Vec<u8>) -> Self {
         self.pkt.payload = payload.into();
         self
     }
 
-    fn with_retain(mut self) -> Self{
+    fn with_retain(mut self) -> Self {
         self.pkt.retain = true;
         self
     }
 }
 
 #[derive(Debug)]
-struct VArgs{
+struct VArgs {
     addr: String,
     protocol: tt::Protocol,
     topic: String,
@@ -418,10 +427,9 @@ struct VArgs{
 
 #[instrument(skip(args, accounts), level = "debug")]
 async fn clean_up(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
-
     let account = accounts.next().unwrap();
-    
-    let mut client=  Connector::new(args, &account);
+
+    let mut client = Connector::new(args, &account);
 
     client.connect("client1").await?;
 
@@ -435,15 +443,14 @@ async fn clean_up(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Err
     Ok(())
 }
 
-#[instrument(skip(args, accounts), name="basic", level = "debug")]
+#[instrument(skip(args, accounts), name = "basic", level = "debug")]
 async fn verify_basic(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
-
     let account = accounts.next().unwrap();
-    
-    let mut client=  Connector::new(args, &account);
+
+    let mut client = Connector::new(args, &account);
 
     client.connect("client").await?;
-    
+
     client.subscribe().await?;
 
     client.publish().await?;
@@ -454,7 +461,10 @@ async fn verify_basic(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(),
 
     client.publish().await?;
 
-    client.recv_timeout().instrument(new_span("recv no message after unsubscribe")).await?;
+    client
+        .recv_timeout()
+        .instrument(new_span("recv no message after unsubscribe"))
+        .await?;
 
     client.disconnect().await?;
 
@@ -463,22 +473,24 @@ async fn verify_basic(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(),
     Ok(())
 }
 
-#[instrument(skip(args, accounts), name="same_client_id", level = "debug")]
-async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error>{
+#[instrument(skip(args, accounts), name = "same_client_id", level = "debug")]
+async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
     let account = accounts.next().unwrap();
-    
-    let mut client1=  Connector::new(args, &account);
-    
+
+    let mut client1 = Connector::new(args, &account);
+
     client1.connect("client1").await?;
 
     client1.subscribe().await?;
-
 
     let mut client2 = Connector::new(args, &account);
 
     client2.connect("client2").await?;
 
-    let r = client1.recv().instrument(new_span("client1 waiting for disconnect")).await;
+    let r = client1
+        .recv()
+        .instrument(new_span("client1 waiting for disconnect"))
+        .await;
 
     client2.disconnect().await?;
 
@@ -490,7 +502,7 @@ async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> R
                 }
             }
             return Err(Error::Generic(format!("expect broken but got {:?}", r)));
-        },
+        }
         tt::Protocol::V5 => {
             if let Ok(ev) = &r {
                 if let tt::client::Event::Packet(pkt) = ev {
@@ -498,20 +510,20 @@ async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> R
                         return Ok(());
                     }
                 }
-            } 
+            }
             return Err(Error::Generic(format!("expect disconnect but got {:?}", r)));
-        },
+        }
     }
 }
 
-#[instrument(skip(args, accounts), name="clean_session", level = "debug")]
-async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error>{
-    /* 
+#[instrument(skip(args, accounts), name = "clean_session", level = "debug")]
+async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+    /*
     - clean session basic
     - user 1
         - connect with clean-session=0
-        - subscribe 
-        - publish, and receive 
+        - subscribe
+        - publish, and receive
         - disconnect
     - user 2 (op1)
         - connect with clean-session=1
@@ -534,24 +546,26 @@ async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Re
 
     // user 1 connect with clean-session 0, subscribe and disconnect
     {
-        let mut client1=  Connector::new( 
-            args, &user1)
+        let mut client1 = Connector::new(args, &user1)
             .with_clean_session(false)
             .with_session_expire(expired_seconds);
 
         client1.connect("client1").await?;
-    
+
         client1.subscribe().await?;
 
         client1.publish().await?;
 
-        client1.recv_publish0().instrument(new_span("recving online")).await?;
+        client1
+            .recv_publish0()
+            .instrument(new_span("recving online"))
+            .await?;
 
         client1.disconnect().await?;
     }
-    
+
     // user2 connect and send message
-    let mut client2=  Connector::new(args, &user2);
+    let mut client2 = Connector::new(args, &user2);
 
     client2.connect("client2").await?;
 
@@ -559,14 +573,16 @@ async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Re
 
     // user1 connect again and got offline m1
     {
-        let mut client1=  Connector::new( 
-            args, &user1)
+        let mut client1 = Connector::new(args, &user1)
             .with_clean_session(false)
             .with_session_expire(expired_seconds);
 
         client1.connect("client1").await?;
-    
-        client1.recv_publish0().instrument(new_span("recving offline")).await?;
+
+        client1
+            .recv_publish0()
+            .instrument(new_span("recving offline"))
+            .await?;
 
         client1.disconnect().await?;
     }
@@ -577,11 +593,14 @@ async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Re
 
     // user1 connect with clean-sesison 1, got nothing
     {
-        let mut client1=  Connector::new( args, &user1);
+        let mut client1 = Connector::new(args, &user1);
 
         client1.connect("client1").await?;
-    
-        client1.recv_timeout().instrument(new_span("recv nothing")).await?;
+
+        client1
+            .recv_timeout()
+            .instrument(new_span("recv nothing"))
+            .await?;
 
         client1.disconnect().await?;
     }
@@ -591,8 +610,8 @@ async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Re
     Ok(())
 }
 
-#[instrument(skip(args, accounts), name="retain", level = "debug")]
-async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error>{
+#[instrument(skip(args, accounts), name = "retain", level = "debug")]
+async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
     /*
         - retain message
             - user 1: connect and publish m1 with retain, m2 without retain, disconnect
@@ -617,27 +636,39 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     let user1 = accounts.next().unwrap();
     let user2 = accounts.next().unwrap();
     let user3 = accounts.next().unwrap();
-    
-    let m1 = Message::new(args).with_payload(vec![0x01u8; 1]).with_retain();
+
+    let m1 = Message::new(args)
+        .with_payload(vec![0x01u8; 1])
+        .with_retain();
     let m2 = Message::new(args).with_payload(vec![0x02u8; 2]);
-    let m3 = Message::new(args).with_payload(vec![0x03u8; 3]).with_retain();
-    let m4 = Message::new(args).with_payload(vec![0x04u8; 4]).with_retain();
-    let m5 = Message::new(args).with_payload(vec![0x05u8; 5]).with_retain();
-    let m6 = Message::new(args).with_payload(vec![0x06u8; 6]).with_retain();
+    let m3 = Message::new(args)
+        .with_payload(vec![0x03u8; 3])
+        .with_retain();
+    let m4 = Message::new(args)
+        .with_payload(vec![0x04u8; 4])
+        .with_retain();
+    let m5 = Message::new(args)
+        .with_payload(vec![0x05u8; 5])
+        .with_retain();
+    let m6 = Message::new(args)
+        .with_payload(vec![0x06u8; 6])
+        .with_retain();
     let m7 = Message::new(args).with_payload(vec![0x07u8; 7]);
-    let m8 = Message::new(args).with_payload(vec![0x08u8; 8]).with_retain();
+    let m8 = Message::new(args)
+        .with_payload(vec![0x08u8; 8])
+        .with_retain();
     let m9 = Message::new(args).with_payload(vec![0x09u8; 9]);
     let m0 = Message::new(args).with_payload(vec![]).with_retain();
-    
+
     // {
     //     let mut client2=  Connector::new( args, &user2);
-        
+
     //     client2.connect().await?;
 
     //     client2.subscribe().await?;
 
     //     let mut client1=  Connector::new( args, &user1);
-        
+
     //     client1.connect().await?;
 
     //     client1.publish1(m3.pkt.clone()).await?;
@@ -653,10 +684,9 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     //     }
     // }
 
-
     {
-        let mut client1=  Connector::new( args, &user1);
-        
+        let mut client1 = Connector::new(args, &user1);
+
         client1.connect("client1").await?;
 
         client1.publish1(m1.pkt.clone()).await?;
@@ -667,21 +697,25 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     }
 
     // // - user 2: connect and subscribe and recevie m1 with retain
-    let mut client2=  Connector::new( args, &user2);
+    let mut client2 = Connector::new(args, &user2);
     client2.connect("client2").await?;
     client2.subscribe().await?;
-    client2.recv_publish1(&m1.pkt).instrument(new_span("user2 recving retain msg1")).await?;
-    
+    client2
+        .recv_publish1(&m1.pkt)
+        .instrument(new_span("user2 recving retain msg1"))
+        .await?;
 
     //  - user 3: connect and subscribe and recevie m1 with retain
-    let mut client3=  Connector::new( args, &user3);
+    let mut client3 = Connector::new(args, &user3);
     client3.connect("client3").await?;
     client3.subscribe().await?;
-    client3.recv_publish1(&m1.pkt).instrument(new_span("user3 recving retain msg1")).await?;
-
+    client3
+        .recv_publish1(&m1.pkt)
+        .instrument(new_span("user3 recving retain msg1"))
+        .await?;
 
     // - user 1: connect and publish m3 with retain
-    let mut client1=  Connector::new( args, &user1);
+    let mut client1 = Connector::new(args, &user1);
     client1.connect("client1").await?;
     client1.publish1(m3.pkt.clone()).await?;
     client1.disconnect().await?;
@@ -689,11 +723,16 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     // - user 2: receive m3 with retain
     // - user 3: receive m3 with retain
     // - user 3: disconnect
-    client2.recv_publish1(&m3.pkt).instrument(new_span("user2 recving retain msg3")).await?;
-    client3.recv_publish1(&m3.pkt).instrument(new_span("user3 recving retain msg3")).await?;
+    client2
+        .recv_publish1(&m3.pkt)
+        .instrument(new_span("user2 recving retain msg3"))
+        .await?;
+    client3
+        .recv_publish1(&m3.pkt)
+        .instrument(new_span("user3 recving retain msg3"))
+        .await?;
     client3.disconnect().await?;
     drop(client3);
-
 
     // - user 1: publish m4, m5, m6, all with retain
     client1.publish1(m4.pkt.clone()).await?;
@@ -701,31 +740,55 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     client1.publish1(m6.pkt.clone()).await?;
 
     // - user 2: receive m4, m5, m6, with retain
-    client2.recv_publish1(&m4.pkt).instrument(new_span("user2 recving msg4")).await?;
-    client2.recv_publish1(&m5.pkt).instrument(new_span("user2 recving msg5")).await?;
-    client2.recv_publish1(&m6.pkt).instrument(new_span("user2 recving msg6")).await?;
+    client2
+        .recv_publish1(&m4.pkt)
+        .instrument(new_span("user2 recving msg4"))
+        .await?;
+    client2
+        .recv_publish1(&m5.pkt)
+        .instrument(new_span("user2 recving msg5"))
+        .await?;
+    client2
+        .recv_publish1(&m6.pkt)
+        .instrument(new_span("user2 recving msg6"))
+        .await?;
 
     // - user 3: connect and recevie m6, with retain
     // - user 3: disconnect
-    let mut client3=  Connector::new( args, &user3);
+    let mut client3 = Connector::new(args, &user3);
     client3.connect("client3").await?;
-    client3.recv_publish1(&m6.pkt).instrument(new_span("user3 recving retain msg6")).await?;
+    client3
+        .recv_publish1(&m6.pkt)
+        .instrument(new_span("user3 recving retain msg6"))
+        .await?;
     client3.disconnect().await?;
-    
+
     // - user 1: publish m7(without retain), m8(with retain), m9(without retain)
     client1.publish1(m7.pkt.clone()).await?;
     client1.publish1(m8.pkt.clone()).await?;
     client1.publish1(m9.pkt.clone()).await?;
 
     // - user 2: receive m7(without retain), m8(with retain), m9(without retain)
-    client2.recv_publish1(&m7.pkt).instrument(new_span("user2 recving msg7")).await?;
-    client2.recv_publish1(&m8.pkt).instrument(new_span("user2 recving msg8")).await?;
-    client2.recv_publish1(&m9.pkt).instrument(new_span("user2 recving msg9")).await?;
+    client2
+        .recv_publish1(&m7.pkt)
+        .instrument(new_span("user2 recving msg7"))
+        .await?;
+    client2
+        .recv_publish1(&m8.pkt)
+        .instrument(new_span("user2 recving msg8"))
+        .await?;
+    client2
+        .recv_publish1(&m9.pkt)
+        .instrument(new_span("user2 recving msg9"))
+        .await?;
 
     // - user 3: connect and recevie m8, with retain
-    let mut client3=  Connector::new( args, &user3);
+    let mut client3 = Connector::new(args, &user3);
     client3.connect("client3").await?;
-    client3.recv_publish1(&m8.pkt).instrument(new_span("user3 recving msg8")).await?;
+    client3
+        .recv_publish1(&m8.pkt)
+        .instrument(new_span("user3 recving msg8"))
+        .await?;
 
     // clean up
     client1.publish1(m0.pkt.clone()).await?;
@@ -736,29 +799,29 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     Ok(())
 }
 
-#[instrument(skip(args, accounts), name="will", level = "debug")]
-async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error>{
+#[instrument(skip(args, accounts), name = "will", level = "debug")]
+async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
     // - will message
     // - user 1: connect and subscribe
     // - user 2: connect with will m1 and shutdown socket
     // - user 1: receive m1
     // - user 3: connect and subscribe, recevie timeout
-  
+
     let user1 = accounts.next().unwrap();
     let user2 = accounts.next().unwrap();
     let user3 = accounts.next().unwrap();
 
-    let mut client1=  Connector::new( args, &user1);
+    let mut client1 = Connector::new(args, &user1);
     client1.connect("client1").await?;
     client1.subscribe().await?;
 
-    let mut client2=  Connector::new( args, &user2 ).with_will(false);
+    let mut client2 = Connector::new(args, &user2).with_will(false);
     client2.connect("client2").await?;
     client2.shutdown().await?;
 
     client1.recv_publish0().await?;
 
-    let mut client3=  Connector::new( args, &user3);
+    let mut client3 = Connector::new(args, &user3);
     client3.connect("client3").await?;
     client3.subscribe().await?;
     client3.recv_timeout().await?;
@@ -772,7 +835,7 @@ async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), 
 #[instrument(skip(cfg), level = "debug")]
 async fn verfiy(cfg: &Config, ver: tt::Protocol) -> Result<(), Error> {
     let addr = cfg.address.as_ref().unwrap().to_string();
-    let args = VArgs{
+    let args = VArgs {
         addr,
         protocol: ver,
         topic: "t1/t2".to_string(),
@@ -780,11 +843,11 @@ async fn verfiy(cfg: &Config, ver: tt::Protocol) -> Result<(), Error> {
         timeout: Duration::from_secs(cfg.timeout_seconds),
         payload: vec![0x11u8, 0x22],
     };
-    
+
     clean_up(&args, AccountIter::new(&cfg.accounts)).await?;
 
     verify_basic(&args, AccountIter::new(&cfg.accounts)).await?;
-    
+
     verify_same_client_id(&args, AccountIter::new(&cfg.accounts)).await?;
 
     verify_clean_session(&args, AccountIter::new(&cfg.accounts)).await?;
@@ -802,15 +865,16 @@ async fn run(cfg: Config) -> Result<(), Error> {
     Ok(())
 }
 
-
 #[tokio::main]
 async fn main() {
-    tq3::log::tracing_subscriber::init_with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW);
+    tq3::log::tracing_subscriber::init_with_span_events(
+        tracing_subscriber::fmt::format::FmtSpan::NEW,
+    );
 
     let args = CmdArgs::parse();
 
     let mut cfg = Config::default();
-    if let Some(fname) = &args.config{
+    if let Some(fname) = &args.config {
         debug!("loading config file [{}]...", fname);
         let mut c = config::Config::default();
         c.merge(config::File::with_name(fname)).unwrap();
