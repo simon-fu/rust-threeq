@@ -215,6 +215,12 @@ impl TryFrom<u8> for SubscribeReasonCode {
     }
 }
 
+impl SubscribeReasonCode{
+    pub fn is_success(&self) -> bool{
+        return *self == Self::QoS0 || *self == Self::QoS1 || *self == Self::QoS2;
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
