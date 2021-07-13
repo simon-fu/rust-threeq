@@ -1,6 +1,7 @@
 /*
 TODO:
 - support QoS1, Qos2, QoS match
+- support retain, and publish empty msg to clean retain
 - support cluster
 - support in-flight window
 - support publish topic alias

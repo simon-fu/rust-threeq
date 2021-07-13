@@ -10,20 +10,6 @@ pub type Packet = tbytes::v5::Packet;
 pub type PacketType = tbytes::PacketType;
 
 pub type Error = tbytes::Error;
-// #[derive(Debug, thiserror::Error)]
-// pub enum Error {
-//     #[error("Packet parsing error: {0:?}")]
-//     Packet(tbytes::Error),
-
-//     #[error("I/O error: {0}")]
-//     Io(#[from] std::io::Error),
-// }
-
-// impl From<tbytes::Error> for Error {
-//     fn from(error: tbytes::Error) -> Self {
-//         Error::Packet(error)
-//     }
-// }
 
 pub type Connect = tbytes::v5::Connect;
 
@@ -60,6 +46,12 @@ pub type ConnectReturnCode = tbytes::v5::ConnectReturnCode;
 pub type ConnAckProperties = tbytes::v5::ConnAckProperties;
 
 pub type SubscribeReasonCode = tbytes::v5::SubscribeReasonCode;
+
+pub type UnsubAckReason = tbytes::v5::UnsubAckReason;
+
+pub type ConnectProperties = tbytes::v5::ConnectProperties;
+
+pub type LastWill = tbytes::v5::LastWill;
 
 // pub trait Handlers<T> {
 //     fn handle_connect(&self, pkt : Connect) -> T;

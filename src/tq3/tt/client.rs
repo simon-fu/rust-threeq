@@ -45,7 +45,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     time::{error::Elapsed, Instant},
 };
-use tracing::{debug, trace};
+use tracing::{debug, error, trace};
 
 macro_rules! trace_input {
     ($a:expr) => {{
@@ -85,7 +85,7 @@ pub enum Error {
     #[error("State error: {0}")]
     State(String),
 
-    #[error("Generic error: {0}")]
+    #[error("error: {0}")]
     Generic(String),
 }
 
@@ -135,12 +135,21 @@ async fn recv_closed(rx: &mut ResponseRX) -> Result<(), Error> {
 #[derive(Debug)]
 enum ReqItem {
     Packet(tt::Packet),
+    Shutdown,
 }
 
 impl ReqItem {
+    fn ref_pkt(&self) -> Result<&tt::Packet, Error> {
+        match self {
+            ReqItem::Packet(pkt) => Ok(&pkt),
+            ReqItem::Shutdown => Err(Error::Generic("Not packet req".to_string())),
+        }
+    }
+
     fn unwrap_pkt(self) -> Result<tt::Packet, Error> {
         match self {
             ReqItem::Packet(pkt) => Ok(pkt),
+            ReqItem::Shutdown => Err(Error::Generic("Not packet req".to_string())),
         }
     }
 }
@@ -262,7 +271,7 @@ impl Session {
             .remove(&0)
             .ok_or_else(|| Error::Generic("inflight unexpect connack".to_string()))?;
 
-        if let tt::Packet::Connect(_) = req.req.unwrap_pkt()? {
+        if let tt::Packet::Connect(_) = req.req.ref_pkt()? {
             if pkt.properties.is_some() {
                 if pkt.properties.as_ref().unwrap().server_keep_alive.is_some() {
                     let conn = self.conn_pkt.as_mut().unwrap();
@@ -333,7 +342,7 @@ impl Session {
             .remove(&pkt.pkid)
             .ok_or_else(|| Error::Generic("inflight unexpect subnack".to_string()))?;
 
-        if let tt::Packet::Subscribe(_) = req.req.unwrap_pkt()? {
+        if let tt::Packet::Subscribe(_) = req.req.ref_pkt()? {
             self.rsp_packet(req.tx, tt::Packet::SubAck(pkt)).await
         } else {
             Err(Error::Generic(format!("{:?} unexpect suback", pkt)))
@@ -356,7 +365,7 @@ impl Session {
             .remove(&pkt.pkid)
             .ok_or_else(|| Error::Generic("inflight unexpect unsubnack".to_string()))?;
 
-        if let tt::Packet::Unsubscribe(_) = req.req.unwrap_pkt()? {
+        if let tt::Packet::Unsubscribe(_) = req.req.ref_pkt()? {
             self.rsp_packet(req.tx, tt::Packet::UnsubAck(pkt)).await
         } else {
             Err(Error::Generic(format!("{:?} unexpect unsubnack", pkt)))
@@ -379,12 +388,12 @@ impl Session {
             .remove(&pkt.pkid)
             .ok_or_else(|| Error::Generic("inflight unexpect puback".to_string()))?;
 
-        if let tt::Packet::Publish(rpkt) = req.req.unwrap_pkt()? {
+        if let tt::Packet::Publish(rpkt) = req.req.ref_pkt()? {
             if rpkt.qos == tt::QoS::AtLeastOnce {
                 return self.rsp_packet(req.tx, tt::Packet::PubAck(pkt)).await;
             }
         }
-        Err(Error::Generic(format!("{:?} unexpect puback", pkt)))
+        Err(Error::Generic(format!("req {:?} but got puback {:?}", req.req, pkt)))
     }
 
     async fn handle_pubrec(
@@ -475,7 +484,7 @@ impl Session {
             .remove(&pkt.pkid)
             .ok_or_else(|| Error::Generic("inflight unexpect pubcomp".to_string()))?;
 
-        if let tt::Packet::PubRel(_) = req.req.unwrap_pkt()? {
+        if let tt::Packet::PubRel(_) = req.req.ref_pkt()? {
             return self.rsp_packet(req.tx, tt::Packet::PubComp(pkt)).await;
         }
         Err(Error::Generic(format!("{:?} unexpect pubcomp", pkt)))
@@ -492,6 +501,23 @@ impl Session {
         trace_input!(tt::Packet::PingResp);
 
         Ok(())
+    }
+
+    async fn handle_disconnect(
+        &mut self,
+        fixed_header: tt::FixedHeader,
+        bytes: Bytes,
+        _obuf: &mut BytesMut,
+    ) -> Result<(), Error> {
+        self.check_state(State::Working, "handle_disconnect")?;
+
+        let pkt = tt::Disconnect::decode(self.get_protocol(), fixed_header, bytes)?;
+        trace_input!(pkt);
+        if self.get_protocol() == tt::Protocol::V4 {
+            return Err(Error::Generic("V4 got disconnect".to_string()));
+        }
+
+        return self.rsp_packet(None, tt::Packet::Disconnect(pkt)).await;
     }
 
     async fn handle_incoming(
@@ -549,6 +575,10 @@ impl Session {
                             self.handle_pingresp(h, bytes, obuf).await?;
                         }
 
+                        tt::PacketType::Disconnect => {
+                            self.handle_disconnect(h, bytes, obuf).await?;
+                        }
+
                         _ => {
                             return Err(Error::Generic(format!(
                                 "incoming unexpect {:?}",
@@ -563,15 +593,30 @@ impl Session {
     }
 
     async fn response_disconnect(&mut self, reason: &str) -> Result<(), Error> {
-        let ev = Event::Closed(reason.into());
 
-        let tx = match self.inflight.remove(&self.pktid) {
-            Some(req) => req.tx,
-            None => None,
+        match self.inflight.remove(&self.pktid) {
+            Some(req) => self.rsp_event(req.tx,  Event::Closed(reason.into())).await?,
+            None => {},
         };
 
-        self.rsp_event(tx, ev).await
+        self.rsp_event(None, Event::Closed(reason.into())).await
     }
+
+    async fn response_inflight_error(&mut self, reason: &str) -> Result<(), Error> {
+
+        let mut txx: Vec<Option<ResponseTX>> = Default::default();
+        for (_, v) in self.inflight.drain() {
+            txx.push(v.tx);
+        }
+
+        for tx in txx {
+            let e = Error::Generic(reason.into());
+            let _ = self.rsp_error(tx, e).await;
+        }
+
+        Ok(())
+    }
+
 
     async fn exec_connect(
         &mut self,
@@ -657,7 +702,7 @@ impl Session {
         now: Instant,
         mut req: Request,
         obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let r = match &mut req.req {
             ReqItem::Packet(pkt0) => {
                 self.last_active_time = now;
@@ -670,6 +715,9 @@ impl Session {
                     _ => panic!("exec_req unexpect {:?}", pkt0),
                 }
             }
+            ReqItem::Shutdown => {
+                return Ok(true);
+            } 
         };
 
         match r {
@@ -677,20 +725,11 @@ impl Session {
                 if is_inflight {
                     self.inflight.insert(n, req);
                 }
-                Ok(())
+                Ok(false)
             }
             Err(e) => Err(e),
         }
     }
-
-    // fn get_next_ping_time(&self) -> Instant {
-    //     if let Some(pkt) = &self.conn_pkt {
-    //         self.last_active_time + Duration::from_secs(pkt.keep_alive as u64)
-    //     } else {
-    //         self.last_active_time + Duration::from_secs(999999999)
-    //     }
-
-    // }
 
     fn next(&mut self, now: Instant, obuf: &mut BytesMut) -> Result<(bool, bool, Instant), Error> {
         let hold_req = self.state == State::Disconnecting || obuf.len() >= self.max_osize;
@@ -740,7 +779,6 @@ async fn task_entry(
                         session.response_disconnect("active disconnect").await?;
                         break;
                     } else {
-                        let _ = session.rsp_error(None, Error::Broken("read disconnected".to_string()) ).await;
                         return Err(Error::Broken("read disconnected".to_string()));
                     }
                 }
@@ -750,10 +788,15 @@ async fn task_entry(
             r = req_rx.recv(), if !hold_req => {
                 match r{
                     Some(req)=>{
-                        session.exec_req(Instant::now(), req, &mut obuf).await?;
+                        let shutdown = session.exec_req(Instant::now(), req, &mut obuf).await?;
+                        if shutdown {
+                            debug!("shutdown");
+                            wr.shutdown().await?;
+                            break;
+                        }
                     }
                     None => {
-                        debug!("no sender, closed");
+                        //debug!("no sender, closed");
                         break;
                     },
                 }
@@ -768,9 +811,17 @@ async fn task_entry(
     Ok(())
 }
 
-pub async fn make_connection(addr: &str) -> Result<(Sender, Receiver), Error> {
-    let socket = TcpStream::connect(addr).await?;
-    debug!("connected to {}", addr);
+pub async fn make_connection(addr: &str) -> Result<Client, Error> {
+    trace!("connecting to [{}]...", addr);
+    let socket = match TcpStream::connect(addr).await{
+        Ok(h) => h,
+        Err(e) => {
+            let e = Error::Generic(format!("unable to connect {}, {}", addr, e.to_string()));
+            debug!("{}", e.to_string());
+            return Err(e);
+        },
+    };
+    trace!("connected [{}]", addr);
 
     let (req_tx, req_rx) = mpsc::channel(64);
     let (ev_tx, ev_rx) = mpsc::channel(64);
@@ -778,12 +829,29 @@ pub async fn make_connection(addr: &str) -> Result<(Sender, Receiver), Error> {
     tokio::spawn(async move {
         let mut session = Session::new(ev_tx, Instant::now());
         if let Err(e) = task_entry(socket, req_rx, &mut session).await {
-            debug!("task finished with error [{:?}]", e);
+            debug!("<{:p}> task finished with error [{:?}]", &session, e);
+            let _ = session.response_inflight_error(&format!("{:?}", e)).await;
             let _ = session.rsp_error(None, e).await;
         }
     });
 
-    Ok((Sender { tx: req_tx }, Receiver { rx: ev_rx }))
+    Ok(
+        Client{
+            sender:Sender { tx: req_tx }, 
+            receiver: Receiver { rx: ev_rx } 
+        }
+    )
+}
+
+pub struct Client{
+    pub sender: Sender,
+    pub receiver: Receiver,
+}
+
+impl Client {
+    pub fn split(self) -> (Sender, Receiver) {
+        (self.sender, self.receiver)
+    }
 }
 
 pub struct Receiver {
@@ -843,6 +911,21 @@ impl Sender {
         }
 
         return recv_closed(&mut rx).await;
+    }
+
+    pub async fn shutdown(&mut self) -> Result<(), Error> {
+        if let Err(_) = self
+            .tx
+            .send(Request {
+                req: ReqItem::Shutdown,
+                tx: None,
+            })
+            .await
+        {
+            return Err(Error::Finished);
+        }
+
+        return Ok(());
     }
 
     pub async fn subscribe(&mut self, pkt: tt::Subscribe) -> Result<tt::SubAck, Error> {

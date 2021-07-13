@@ -1,0 +1,25 @@
+{
+    
+    /*
+       - refer: https://hjson.github.io/
+       - ${*} for any string
+    */
+
+    // local env
+    address: 127.0.0.1:1883
+    accounts:
+    [
+        {
+            user: test1
+            password: 111
+            client_id: "test1@app_id"
+        }
+        {
+            user: test2
+            password: 111
+            client_id: "${*}@app_id" // ${*} for any string
+        }
+    ]
+
+    timeout_seconds: 2
+}

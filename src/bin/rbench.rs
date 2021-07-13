@@ -6,22 +6,31 @@ use tracing::{error, info};
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
 #[derive(Clap, Debug, Default)]
-#[clap(name = "threeq broker", author, about, version)]
+#[clap(name = "threeq bench", author, about, version)]
 struct Config {
     #[clap(
-        short = 'l',
-        long = "tcp-listen",
-        default_value = "0.0.0.0:1883",
-        long_about = "tcp listen address."
+        short = 'a',
+        long = "address",
+        default_value = "127.0.0.1:1883",
+        long_about = "broker address, ip:port."
     )]
-    tcp_listen_addr: String,
+    address: String,
 
     #[clap(
-        short = 'g',
-        long = "enable_gc",
-        long_about = "enable memory garbage collection"
+        short = 'u',
+        long = "username",
+        default_value = "",
+        long_about = "username."
     )]
-    enable_gc: bool,
+    username: String,
+
+    #[clap(
+        short = 'p',
+        long = "password",
+        default_value = "",
+        long_about = "password."
+    )]
+    password: String,
 }
 
 async fn recv_loop(mut receiver: tt::client::Receiver) -> Result<(), tt::client::Error> {
@@ -49,7 +58,7 @@ async fn bench() -> Result<(), tt::client::Error> {
     // let password = "YWMtBeUx0NfpEeuG9u0EJlumBegrzF8zZk2Wp8GS3pF-orBnUI9QkdAR66aBgQQ44eDgAwMAAAF6UbAwbwBPGgCZG2uBHDrvCLM7SH4UTlW3piJwMgU5bfGByO8pgLz77Q";
     // let client_id = "dev111@1PGUGY";
 
-    let (mut sender, receiver) = tt::client::make_connection(addr).await?;
+    let (mut sender, receiver) = tt::client::make_connection(addr).await?.split();
 
     let task = tokio::spawn(async move {
         if let Err(e) = recv_loop(receiver).await {

@@ -121,4 +121,20 @@ pub mod tracing_subscriber {
             .event_format(MyFormatter::default())
             .init();
     }
+
+    pub fn init_with_span_events(kind: tracing_subscriber::fmt::format::FmtSpan) {
+        let env_filter = if std::env::var(EnvFilter::DEFAULT_ENV).is_ok() {
+            EnvFilter::from_default_env()
+        } else {
+            EnvFilter::new("info")
+        };
+
+        tracing_subscriber::fmt()
+            .with_target(false)
+            .with_env_filter(env_filter)
+            .with_span_events(kind)
+            .event_format(MyFormatter::default())
+            .init();
+    }
+
 }
