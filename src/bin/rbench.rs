@@ -1,12 +1,16 @@
-use std::{fmt::Debug, sync::Arc, time::{Duration, Instant}};
+use std::{
+    fmt::Debug,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bytes::{Buf, BufMut, BytesMut};
 use clap::Clap;
 use histogram::Histogram;
-use tokio::{sync::{mpsc, watch}};
-use tt::config::*;
-use rust_threeq::tq3::{self, TS, tt};
+use rust_threeq::tq3::{self, tt, TS};
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, trace, warn};
+use tt::config::*;
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
 #[derive(Clap, Debug, Default)]
@@ -29,7 +33,7 @@ pub enum Error {
 }
 
 #[derive(Default, Debug)]
-struct SubStati{
+struct SubStati {
     latencyh: histogram::Histogram,
     lost: u64,
 }
@@ -42,7 +46,7 @@ impl SubStati {
 }
 
 #[derive(Default, Debug)]
-struct PubStati{
+struct PubStati {
     qps: u64,
 }
 
@@ -67,9 +71,9 @@ type EVSender = mpsc::Sender<TaskEvent>;
 type EVRecver = mpsc::Receiver<TaskEvent>;
 type ReqRecver = watch::Receiver<TaskReq>;
 
-fn is_recv_done(seqs: &Vec<u64>, packets: u64) -> bool{
+fn is_recv_done(seqs: &Vec<u64>, packets: u64) -> bool {
     let mut done = true;
-    for v in seqs{
+    for v in seqs {
         if *v < packets {
             done = false;
             break;
@@ -78,16 +82,25 @@ fn is_recv_done(seqs: &Vec<u64>, packets: u64) -> bool{
     return done;
 }
 
-async fn wait_for_req(rx: &mut ReqRecver) -> Result<TaskReq, Error>{
+async fn wait_for_req(rx: &mut ReqRecver) -> Result<TaskReq, Error> {
     if let Err(e) = rx.changed().await {
         return Err(Error::WatchError(e));
     }
     return Ok(*rx.borrow());
 }
 
-async fn sub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSender, mut rx: ReqRecver) -> Result<(), Error>{
-    let (mut sender, mut receiver) = tt::client::make_connection(&format!("sub{}", n), &cfg.env.address).await?.split();
-    
+async fn sub_task(
+    n: u64,
+    cfg: Arc<tt::config::Config>,
+    acc: Account,
+    tx: &EVSender,
+    mut rx: ReqRecver,
+) -> Result<(), Error> {
+    let (mut sender, mut receiver) =
+        tt::client::make_connection(&format!("sub{}", n), &cfg.env.address)
+            .await?
+            .split();
+
     let pkt = init_conn_pkt(&acc, tt::Protocol::V4);
     let ack = sender.connect(pkt).await?;
     if ack.code != tt::ConnectReturnCode::Success {
@@ -95,7 +108,9 @@ async fn sub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSe
     }
     let _r = tx.send(TaskEvent::SubConnected(Instant::now())).await;
 
-    let ack = sender.subscribe(tt::Subscribe::new(&cfg.subs.topic, cfg.subs.qos)).await?;
+    let ack = sender
+        .subscribe(tt::Subscribe::new(&cfg.subs.topic, cfg.subs.qos))
+        .await?;
     for reason in &ack.return_codes {
         if !reason.is_success() {
             return Err(Error::Generic(format!("{:?}", ack)));
@@ -105,9 +120,9 @@ async fn sub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSe
     let _r = tx.send(TaskEvent::Subscribed(Instant::now())).await;
 
     let mut seqs = vec![0u64; cfg.pubs.connections as usize];
-    
+
     let mut stati = SubStati::default();
-    
+
     loop {
         let ev = tokio::select! {
             r = receiver.recv() => {
@@ -124,18 +139,14 @@ async fn sub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSe
         };
 
         let mut rpkt = match ev {
-            tt::client::Event::Packet(pkt) => {
-                match pkt {
-                    tt::Packet::Publish(rpkt) => { rpkt },
-                    _ =>  {
-                        return Err(Error::Generic(format!("unexpect packet {:?}", pkt)))
-                    }
-                }
+            tt::client::Event::Packet(pkt) => match pkt {
+                tt::Packet::Publish(rpkt) => rpkt,
+                _ => return Err(Error::Generic(format!("unexpect packet {:?}", pkt))),
             },
             tt::client::Event::Closed(s) => {
                 debug!("got closed [{}]", s);
                 break;
-            },
+            }
         };
 
         let puber = rpkt.payload.get_u64();
@@ -149,19 +160,22 @@ async fn sub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSe
 
         let next_seq = &mut seqs[puber as usize];
 
-        if seq == 0 && *next_seq > 0{
-            // restart 
+        if seq == 0 && *next_seq > 0 {
+            // restart
             debug!("restart, n {}, npkt {}", seq, next_seq);
             break;
         } else if seq < *next_seq {
-            return Err(Error::Generic(format!("expect seq {}, but {}", *next_seq, seq)));
-        } else if seq > *next_seq{
+            return Err(Error::Generic(format!(
+                "expect seq {}, but {}",
+                *next_seq, seq
+            )));
+        } else if seq > *next_seq {
             stati.lost += seq - *next_seq;
         }
-        
+
         let latency = TS::now_ms() - ts;
         let _r = stati.latencyh.increment(latency as u64);
-        *next_seq = seq+1;
+        *next_seq = seq + 1;
 
         if *next_seq > cfg.pubs.packets {
             error!("seq exceed limit {}, puber {}", next_seq, puber);
@@ -174,7 +188,7 @@ async fn sub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSe
     }
 
     // check lost
-    for v in &seqs{
+    for v in &seqs {
         if *v < cfg.pubs.packets {
             stati.lost += cfg.pubs.packets - *v;
         }
@@ -185,8 +199,16 @@ async fn sub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSe
     Ok(())
 }
 
-async fn pub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSender, mut rx: ReqRecver) -> Result<(), Error>{
-    let (mut sender, _recver) = tt::client::make_connection(&format!("pub{}", n), &cfg.env.address).await?.split();
+async fn pub_task(
+    n: u64,
+    cfg: Arc<tt::config::Config>,
+    acc: Account,
+    tx: &EVSender,
+    mut rx: ReqRecver,
+) -> Result<(), Error> {
+    let (mut sender, _recver) = tt::client::make_connection(&format!("pub{}", n), &cfg.env.address)
+        .await?
+        .split();
     drop(n);
 
     let pkt = init_conn_pkt(&acc, tt::Protocol::V4);
@@ -201,7 +223,7 @@ async fn pub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSe
         pacer = pacer.with_time(t);
         let mut buf = BytesMut::with_capacity(cfg.pubs.size);
         let pkt = tt::Publish::new(&cfg.pubs.topic, cfg.pubs.qos, []);
-        
+
         while seq < cfg.pubs.packets {
             trace!("send No.{} packet", seq);
 
@@ -216,9 +238,9 @@ async fn pub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSe
             buf.put_u64(seq);
             buf.put_i64(ts);
             let content = cfg.pubs.payload.as_bytes();
-            buf.put_u64 (content.len() as u64);
+            buf.put_u64(content.len() as u64);
             buf.put(content);
-            let remaining = cfg.pubs.size  - buf.len();
+            let remaining = cfg.pubs.size - buf.len();
             unsafe {
                 buf.advance_mut(remaining);
             }
@@ -229,9 +251,8 @@ async fn pub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSe
             seq += 1;
         }
     }
-    
+
     sender.disconnect(tt::Disconnect::new()).await?;
-    
 
     let mut stati = PubStati::default();
     let elapsed_ms = pacer.kick_time().elapsed().as_millis() as u64;
@@ -252,10 +273,10 @@ fn print_histogram_summary(name: &str, unit: &str, h: &Histogram) {
     }
 
     info!("{} Summary:", name);
-    info!("     Min: {} {}", h.minimum().unwrap(), unit );
-    info!("     Avg: {} {}", h.mean().unwrap(), unit );
-    info!("     Max: {} {}", h.maximum().unwrap(), unit );
-    info!("  StdDev: {} {}", h.stddev().unwrap(), unit );
+    info!("     Min: {} {}", h.minimum().unwrap(), unit);
+    info!("     Avg: {} {}", h.mean().unwrap(), unit);
+    info!("     Max: {} {}", h.maximum().unwrap(), unit);
+    info!("  StdDev: {} {}", h.stddev().unwrap(), unit);
 }
 
 fn print_histogram_percent(name: &str, unit: &str, h: &Histogram) {
@@ -265,15 +286,38 @@ fn print_histogram_percent(name: &str, unit: &str, h: &Histogram) {
     }
 
     info!("{} Percentiles:", name);
-    info!("   P50: {} {} ({}/{})", h.percentile(50.0).unwrap(), unit, h.entries()*50/100, h.entries() );
-    info!("   P90: {} {} ({}/{})", h.percentile(90.0).unwrap(), unit, h.entries()*90/100, h.entries() );
-    info!("   P99: {} {} ({}/{})", h.percentile(99.0).unwrap(), unit, h.entries()*99/100, h.entries() );
-    info!("  P999: {} {} ({}/{})", h.percentile(99.9).unwrap(), unit, h.entries()*999/1000, h.entries() );
+    info!(
+        "   P50: {} {} ({}/{})",
+        h.percentile(50.0).unwrap(),
+        unit,
+        h.entries() * 50 / 100,
+        h.entries()
+    );
+    info!(
+        "   P90: {} {} ({}/{})",
+        h.percentile(90.0).unwrap(),
+        unit,
+        h.entries() * 90 / 100,
+        h.entries()
+    );
+    info!(
+        "   P99: {} {} ({}/{})",
+        h.percentile(99.0).unwrap(),
+        unit,
+        h.entries() * 99 / 100,
+        h.entries()
+    );
+    info!(
+        "  P999: {} {} ({}/{})",
+        h.percentile(99.9).unwrap(),
+        unit,
+        h.entries() * 999 / 1000,
+        h.entries()
+    );
 }
 
-
 #[derive(Default, Debug)]
-struct BenchLatency{
+struct BenchLatency {
     sub_conns: u64,
     pub_conns: u64,
     subscribes: u64,
@@ -284,33 +328,39 @@ struct BenchLatency{
 }
 
 impl BenchLatency {
-
     async fn recv_event(&mut self, ev_rx: &mut EVRecver) -> Result<(), Error> {
         let ev = ev_rx.recv().await.unwrap();
         match ev {
-            TaskEvent::Error(e) => { return Err(e); },
-            TaskEvent::SubConnected(_) => { self.sub_conns += 1; },
-            TaskEvent::PubConnected(_) => { self.pub_conns +=1; },
-            TaskEvent::Subscribed(_) => { self.subscribes += 1; },
-            TaskEvent::SubFinished(s) => { 
-                self.sub_finished += 1; 
+            TaskEvent::Error(e) => {
+                return Err(e);
+            }
+            TaskEvent::SubConnected(_) => {
+                self.sub_conns += 1;
+            }
+            TaskEvent::PubConnected(_) => {
+                self.pub_conns += 1;
+            }
+            TaskEvent::Subscribed(_) => {
+                self.subscribes += 1;
+            }
+            TaskEvent::SubFinished(s) => {
+                self.sub_finished += 1;
                 self.sub_stati.merge(&s);
-            },
-            TaskEvent::PubFinished(s) => { 
-                self.pub_finished += 1; 
+            }
+            TaskEvent::PubFinished(s) => {
+                self.pub_finished += 1;
                 let _r = self.pub_qos_h.increment(s.qps);
-            },
+            }
         }
         Ok(())
     }
 
     fn print(&self, cfg: &Arc<tt::config::Config>) {
-
         info!("");
         info!("Pub connections: {}", cfg.pubs.connections);
         info!("Pub packets: {} packets/connection", cfg.pubs.packets);
         print_histogram_summary("Pub QPS", "qps/connection", &self.pub_qos_h);
-    
+
         info!("");
         info!("Sub connections: {}", cfg.subs.connections);
         info!("Sub recv packets: {}", self.sub_stati.latencyh.entries());
@@ -319,19 +369,20 @@ impl BenchLatency {
         print_histogram_percent("Sub Latency", "ms", &self.sub_stati.latencyh);
     }
 
-
-
-    pub async fn bench_priv(&mut self, cfg: Arc<tt::config::Config>, req_tx: &mut watch::Sender<TaskReq>, req_rx: &mut watch::Receiver<TaskReq>) -> Result<(), Error>{
+    pub async fn bench_priv(
+        &mut self,
+        cfg: Arc<tt::config::Config>,
+        req_tx: &mut watch::Sender<TaskReq>,
+        req_rx: &mut watch::Receiver<TaskReq>,
+    ) -> Result<(), Error> {
         let mut accounts = AccountIter::new(&cfg.env.accounts);
         let (ev_tx, mut ev_rx) = mpsc::channel(1024);
         // let (req_tx, req_rx) = watch::channel(TaskReq::Ready);
 
-
         let pacer = tq3::limit::Pacer::new(cfg.subs.conn_per_sec);
         let mut interval = tq3::limit::Interval::new(1000);
         let mut n = 0;
-        while n < cfg.subs.connections{
-            
+        while n < cfg.subs.connections {
             // pacer.check(n, |d|{
             //     futures::executor::block_on(tokio::time::sleep(d));
             // });
@@ -356,7 +407,7 @@ impl BenchLatency {
                     let _r = tx0.send(TaskEvent::Error(e)).await;
                 }
             };
-            let span = tracing::span!(tracing::Level::INFO, "", p=n);
+            let span = tracing::span!(tracing::Level::INFO, "", p = n);
             tokio::spawn(tracing::Instrument::instrument(f, span));
             n += 1;
         }
@@ -371,8 +422,7 @@ impl BenchLatency {
         let mut interval = tq3::limit::Interval::new(1000);
         let mut n = 0;
 
-        while n < cfg.pubs.connections{
-
+        while n < cfg.pubs.connections {
             if let Some(d) = pacer.get_sleep_duration(n) {
                 tokio::time::sleep(d).await;
             }
@@ -392,7 +442,7 @@ impl BenchLatency {
                     let _r = tx0.send(TaskEvent::Error(e)).await;
                 }
             };
-            let span = tracing::span!(tracing::Level::INFO, "", s=n);
+            let span = tracing::span!(tracing::Level::INFO, "", s = n);
             tokio::spawn(tracing::Instrument::instrument(f, span));
             n += 1;
         }
@@ -407,26 +457,26 @@ impl BenchLatency {
         let kick_time = Instant::now();
         let _r = req_tx.send(TaskReq::KickXfer(Instant::now()));
 
-
         debug!("waiting for pub finished...");
         while self.pub_finished < cfg.pubs.connections {
             self.recv_event(&mut ev_rx).await?;
         }
         debug!("all pub finished");
 
-        
         debug!("waiting for sub finished...");
         if let Err(_) = tokio::time::timeout(Duration::from_millis(cfg.recv_timeout_ms), async {
             while self.sub_finished < cfg.subs.connections {
                 self.recv_event(&mut ev_rx).await?;
             }
             Ok::<(), Error>(())
-        }).await {
+        })
+        .await
+        {
             // force stop
             warn!("waiting for sub finished timeout, send stop");
             let _r = req_tx.send(TaskReq::Stop);
         }
-        
+
         // wait for sub finished again
         while self.sub_finished < cfg.subs.connections {
             self.recv_event(&mut ev_rx).await?;
@@ -436,20 +486,18 @@ impl BenchLatency {
 
         self.print(&cfg);
         info!("");
-        info!("Duration: {:?}",duration);
+        info!("Duration: {:?}", duration);
 
         Ok(())
     }
 
-    pub async fn bench(&mut self, cfg: Arc<tt::config::Config>) -> Result<(), Error>{
+    pub async fn bench(&mut self, cfg: Arc<tt::config::Config>) -> Result<(), Error> {
         let (mut req_tx, mut req_rx) = watch::channel(TaskReq::Ready);
         let r = self.bench_priv(cfg, &mut req_tx, &mut req_rx).await;
         // let _r = req_tx.send(TaskReq::Stop);
         return r;
     }
-
 }
-
 
 #[tokio::main]
 async fn main() {
@@ -472,7 +520,7 @@ async fn main() {
     {
         let cfg = Arc::new(cfg);
         let mut bencher = BenchLatency::default();
-    
+
         match bencher.bench(cfg).await {
             Ok(_) => {
                 // info!("bench result ok");
@@ -483,5 +531,4 @@ async fn main() {
         }
         // std::process::exit(0);
     }
-
 }

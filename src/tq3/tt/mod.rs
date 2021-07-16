@@ -171,4 +171,3 @@ pub fn check(mut stream: Iter<u8>, max_packet_size: usize) -> Result<FixedHeader
 
     Ok(FixedHeader::new(*byte1, len_len, len))
 }
-

@@ -1,6 +1,5 @@
-
-use rand::{distributions::Alphanumeric, Rng};
 use crate::tq3::tt;
+use rand::{distributions::Alphanumeric, Rng};
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Account {
@@ -10,37 +9,42 @@ pub struct Account {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
-pub struct Environment  {
+pub struct Environment {
     pub address: String,
     pub accounts: Vec<Account>,
 }
 
-
 use serde::{Deserialize, Deserializer};
 pub trait DeserializeWith: Sized {
     fn deserialize_with<'de, D>(de: D) -> Result<Self, D::Error>
-        where D: Deserializer<'de>;
+    where
+        D: Deserializer<'de>;
 }
 
 impl DeserializeWith for tt::QoS {
-    fn deserialize_with<'de, D>(de: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+    fn deserialize_with<'de, D>(de: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
         let s = String::deserialize(de)?;
         match s.as_ref() {
             "QoS0" => Ok(tt::QoS::AtMostOnce),
             "QoS1" => Ok(tt::QoS::AtLeastOnce),
             "QoS2" => Ok(tt::QoS::ExactlyOnce),
-            _ => Err(serde::de::Error::custom("error trying to deserialize QoS"))
+            _ => Err(serde::de::Error::custom("error trying to deserialize QoS")),
         }
     }
 }
-
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct PubArgs {
     pub connections: u64,
     pub conn_per_sec: u64,
     pub topic: String,
-    #[serde(deserialize_with="tt::QoS::deserialize_with", default="tt::QoS::default")]
+    #[serde(
+        deserialize_with = "tt::QoS::deserialize_with",
+        default = "tt::QoS::default"
+    )]
     pub qos: tt::QoS,
     pub qps: u64,
     pub size: usize,
@@ -53,7 +57,10 @@ pub struct SubArgs {
     pub connections: u64,
     pub conn_per_sec: u64,
     pub topic: String,
-    #[serde(deserialize_with="tt::QoS::deserialize_with", default="tt::QoS::default")]
+    #[serde(
+        deserialize_with = "tt::QoS::deserialize_with",
+        default = "tt::QoS::default"
+    )]
     pub qos: tt::QoS,
 }
 

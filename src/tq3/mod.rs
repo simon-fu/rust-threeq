@@ -19,12 +19,10 @@ impl TS {
         let t1 = *BASE;
         let t2 = std::time::Instant::now();
         let d1 = *SINCE_THE_EPOCH;
-        if (t2-t1).as_millis() > d1 {
-
-        }
+        if (t2 - t1).as_millis() > d1 {}
     }
-    
-    pub fn now_ms() -> i64{
+
+    pub fn now_ms() -> i64 {
         // chrono::Utc::now().timestamp_millis();
         let ms = (std::time::Instant::now() - *BASE).as_millis() + *SINCE_THE_EPOCH;
         return ms as i64;

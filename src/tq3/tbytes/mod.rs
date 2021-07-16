@@ -88,14 +88,13 @@ impl std::str::FromStr for QoS {
 
     fn from_str(input: &str) -> Result<QoS, Self::Err> {
         match input {
-            "QoS0"  => Ok(QoS::AtMostOnce),
-            "QoS1"  => Ok(QoS::AtLeastOnce),
-            "QoS2"  => Ok(QoS::ExactlyOnce),
-            s      => Err(format!("Unknown QoS {}", s)),
+            "QoS0" => Ok(QoS::AtMostOnce),
+            "QoS1" => Ok(QoS::AtLeastOnce),
+            "QoS2" => Ok(QoS::ExactlyOnce),
+            s => Err(format!("Unknown QoS {}", s)),
         }
     }
 }
-
 
 /// Packet type from a byte
 ///

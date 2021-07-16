@@ -37,7 +37,6 @@ struct CmdArgs {
     config: Option<String>,
 }
 
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
@@ -46,7 +45,6 @@ pub enum Error {
     #[error("error: {0}")]
     Generic(String),
 }
-
 
 fn check_publish(rpkt: &tt::Publish, pkt: &tt::Publish, retain: bool) -> Result<(), String> {
     if pkt.qos != rpkt.qos {

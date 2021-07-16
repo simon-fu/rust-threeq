@@ -1,13 +1,13 @@
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
-pub struct Pacer{
-    kick_time : Instant,
-    rate : u64,
+pub struct Pacer {
+    kick_time: Instant,
+    rate: u64,
 }
 
-impl Pacer{
-    pub fn new(rate : u64) -> Self {
+impl Pacer {
+    pub fn new(rate: u64) -> Self {
         Pacer {
             kick_time: Instant::now(),
             rate,
@@ -31,11 +31,11 @@ impl Pacer{
     // if let Some(d) = pacer.get_sleep_duration(n) {
     //     tokio::time::sleep(d).await;
     // }
-    pub fn get_sleep_duration(&self, n : u64) -> Option<Duration>{
+    pub fn get_sleep_duration(&self, n: u64) -> Option<Duration> {
         if self.rate == 0 {
-            return Some(Duration::from_millis(std::u64::MAX/2));
+            return Some(Duration::from_millis(std::u64::MAX / 2));
         }
-        
+
         let expect = 1000 * n / self.rate;
         let diff = expect as i64 - self.kick_time.elapsed().as_millis() as i64;
         if diff > 0 {
@@ -49,7 +49,7 @@ impl Pacer{
     //     if self.rate == 0 {
     //         return std::i64::MAX/2;
     //     }
-        
+
     //     let expect = 1000 * n / self.rate;
     //     let diff = expect as i64 - self.kick_time.elapsed().as_millis() as i64;
     //     return diff;
@@ -91,15 +91,14 @@ impl Pacer{
     // }
 }
 
-
 #[derive(Debug)]
-pub struct Interval{
-    next_time : Instant,
+pub struct Interval {
+    next_time: Instant,
     milli: u64,
 }
 
-impl Interval{
-    pub fn new(milli : u64) -> Self {
+impl Interval {
+    pub fn new(milli: u64) -> Self {
         Interval {
             next_time: Instant::now() + std::time::Duration::from_millis(milli),
             milli,
@@ -111,7 +110,7 @@ impl Interval{
         if now >= self.next_time {
             self.next_time = now + std::time::Duration::from_millis(self.milli);
             return true;
-        } else{
+        } else {
             return false;
         }
     }
