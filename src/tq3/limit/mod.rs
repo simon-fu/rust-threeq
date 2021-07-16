@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub struct Pacer{
@@ -24,57 +24,65 @@ impl Pacer{
         // self.kick_time.elapsed();
     }
 
-    // pub fn elapsed(&self) -> Duration {
-    //     self.kick_time.elapsed()
-    // }
-
     pub fn kick_time(&self) -> &Instant {
         &self.kick_time
     }
 
-    pub fn get_wait_milli(&self, n : u64) -> i64{
+    // if let Some(d) = pacer.get_sleep_duration(n) {
+    //     tokio::time::sleep(d).await;
+    // }
+    pub fn get_sleep_duration(&self, n : u64) -> Option<Duration>{
         if self.rate == 0 {
-            return std::i64::MAX/2;
+            return Some(Duration::from_millis(std::u64::MAX/2));
         }
         
         let expect = 1000 * n / self.rate;
         let diff = expect as i64 - self.kick_time.elapsed().as_millis() as i64;
-        return diff;
-    }
-
-    pub async fn check_wait(&self, n : u64) {
-        let diff = self.get_wait_milli(n);
         if diff > 0 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(diff as u64)).await;
+            Some(Duration::from_millis(diff as u64))
+        } else {
+            None
         }
     }
 
-    pub async fn run_if_wait<'a, F, Fut>(&self, n : u64, f: F)
-    where
-        F: Fn() -> Fut,
-        Fut: futures::Future<Output = bool>,
-    {
-        let mut diff = self.get_wait_milli(n);
-        let mut is_run_next = true;
-        while diff > 0 {
-            if is_run_next {
-                is_run_next = f().await;
-            } else {
-                tokio::time::sleep(tokio::time::Duration::from_millis(diff as u64)).await;
-            }
-            diff = self.get_wait_milli(n);
-        }
-    }
+    // pub fn get_wait_milli(&self, n : u64) -> i64{
+    //     if self.rate == 0 {
+    //         return std::i64::MAX/2;
+    //     }
+        
+    //     let expect = 1000 * n / self.rate;
+    //     let diff = expect as i64 - self.kick_time.elapsed().as_millis() as i64;
+    //     return diff;
+    // }
 
-    // pub async fn run_if_wait2<T>(&self,  n : u64, f: T) 
+    // pub fn check<F, T>(&self, n : u64, mut f: F) -> Option<T>
+    // where F: FnMut(std::time::Duration) -> T,
+    // {
+    //     let diff = self.get_wait_milli(n);
+    //     if diff > 0 {
+    //         let r = f(std::time::Duration::from_millis(diff as u64));
+    //         return Some(r);
+    //     } else {
+    //         None
+    //     }
+    // }
+
+    // pub async fn check_and_wait(&self, n : u64) {
+    //     let diff = self.get_wait_milli(n);
+    //     if diff > 0 {
+    //         tokio::time::sleep(tokio::time::Duration::from_millis(diff as u64)).await;
+    //     }
+    // }
+
+    // pub async fn run_if_wait<F>(&self, n : u64, mut f: F)
     // where
-    //     T: futures::Future<Output = bool>,
+    //     F: FnMut() -> bool,
     // {
     //     let mut diff = self.get_wait_milli(n);
     //     let mut is_run_next = true;
     //     while diff > 0 {
     //         if is_run_next {
-    //             is_run_next = f.await;
+    //             is_run_next = f();
     //         } else {
     //             tokio::time::sleep(tokio::time::Duration::from_millis(diff as u64)).await;
     //         }
@@ -82,42 +90,6 @@ impl Pacer{
     //     }
     // }
 }
-
-
-
-
-
-// pub async fn run_it< F, Fut, >(n : &u64, f: &F )
-// where
-//     F: Fn(&u64) -> Fut,
-//     Fut: futures::Future<Output = bool>,
-// {
-//     for i in 0..*n {
-//         if f(&i).await {
-//             break;
-//         }
-//     }
-// }
-
-// async fn callback(nn: &u64) -> bool {
-//     return *nn > 0;
-// }
-
-// pub struct Tester{
-//     n: u64
-// }
-// impl<'a> Tester {
-//     pub async fn test(&'a mut self, d: std::time::Duration) -> bool{
-//         // run_it(&1, callback).await;
-//         let block = |nn:&u64| async {
-//             return *nn > self.n ;
-//         };
-
-//         run_it(&2, &block).await;
-//         return self.n > 0 && d.as_millis() > 0;
-//     }
-// }
-
 
 
 #[derive(Debug)]

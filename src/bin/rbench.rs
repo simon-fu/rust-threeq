@@ -205,9 +205,8 @@ async fn pub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSe
         while seq < cfg.pubs.packets {
             trace!("send No.{} packet", seq);
 
-            let diff = pacer.get_wait_milli(seq);
-            if diff > 0 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(diff as u64)).await;
+            if let Some(d) = pacer.get_sleep_duration(n) {
+                tokio::time::sleep(d).await;
             }
 
             buf.reserve(cfg.pubs.size);
@@ -247,6 +246,11 @@ async fn pub_task(n: u64, cfg : Arc<tt::config::Config>, acc: Account, tx: &EVSe
 }
 
 fn print_histogram_summary(name: &str, unit: &str, h: &Histogram) {
+    if h.entries() == 0 {
+        info!("{} Summary: (empty)", name);
+        return;
+    }
+
     info!("{} Summary:", name);
     info!("     Min: {} {}", h.minimum().unwrap(), unit );
     info!("     Avg: {} {}", h.mean().unwrap(), unit );
@@ -255,6 +259,11 @@ fn print_histogram_summary(name: &str, unit: &str, h: &Histogram) {
 }
 
 fn print_histogram_percent(name: &str, unit: &str, h: &Histogram) {
+    if h.entries() == 0 {
+        info!("{} Percentiles: (empty)", name);
+        return;
+    }
+
     info!("{} Percentiles:", name);
     info!("   P50: {} {} ({}/{})", h.percentile(50.0).unwrap(), unit, h.entries()*50/100, h.entries() );
     info!("   P90: {} {} ({}/{})", h.percentile(90.0).unwrap(), unit, h.entries()*90/100, h.entries() );
@@ -296,6 +305,7 @@ impl BenchLatency {
     }
 
     fn print(&self, cfg: &Arc<tt::config::Config>) {
+
         info!("");
         info!("Pub connections: {}", cfg.pubs.connections);
         info!("Pub packets: {} packets/connection", cfg.pubs.packets);
@@ -303,21 +313,10 @@ impl BenchLatency {
     
         info!("");
         info!("Sub connections: {}", cfg.subs.connections);
-        info!("Recv packets: {}", self.sub_stati.latencyh.entries());
-        info!("Lost packets: {}", self.sub_stati.lost);
-    
-        if self.sub_stati.latencyh.entries() > 0 {
-            let latencyh = &self.sub_stati.latencyh;
-    
-            info!("");
-            print_histogram_summary("Latency", "ms", latencyh);
-    
-            info!("");
-            print_histogram_percent("Latency", "ms", latencyh);
-            
-        } else {
-            error!("no recv packets");
-        }
+        info!("Sub recv packets: {}", self.sub_stati.latencyh.entries());
+        info!("Sub lost packets: {}", self.sub_stati.lost);
+        print_histogram_summary("Sub Latency", "ms", &self.sub_stati.latencyh);
+        print_histogram_percent("Sub Latency", "ms", &self.sub_stati.latencyh);
     }
 
 
@@ -332,7 +331,16 @@ impl BenchLatency {
         let mut interval = tq3::limit::Interval::new(1000);
         let mut n = 0;
         while n < cfg.subs.connections{
-            pacer.check_wait(n).await;
+            
+            // pacer.check(n, |d|{
+            //     futures::executor::block_on(tokio::time::sleep(d));
+            // });
+
+            if let Some(d) = pacer.get_sleep_duration(n) {
+                tokio::time::sleep(d).await;
+            }
+
+            // pacer.check_and_wait(n).await;
             if interval.check() {
                 debug!("spawned sub tasks {}", n);
             }
@@ -362,8 +370,13 @@ impl BenchLatency {
         let pacer = tq3::limit::Pacer::new(cfg.pubs.conn_per_sec);
         let mut interval = tq3::limit::Interval::new(1000);
         let mut n = 0;
+
         while n < cfg.pubs.connections{
-            pacer.check_wait(n).await;
+
+            if let Some(d) = pacer.get_sleep_duration(n) {
+                tokio::time::sleep(d).await;
+            }
+
             if interval.check() {
                 debug!("spawned pub tasks {}", n);
             }
@@ -413,7 +426,7 @@ impl BenchLatency {
             warn!("waiting for sub finished timeout, send stop");
             let _r = req_tx.send(TaskReq::Stop);
         }
-
+        
         // wait for sub finished again
         while self.sub_finished < cfg.subs.connections {
             self.recv_event(&mut ev_rx).await?;
@@ -422,6 +435,7 @@ impl BenchLatency {
         debug!("all sub finished");
 
         self.print(&cfg);
+        info!("");
         info!("Duration: {:?}",duration);
 
         Ok(())
