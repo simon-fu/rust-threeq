@@ -388,6 +388,9 @@ impl BenchLatency {
             // });
 
             if let Some(d) = pacer.get_sleep_duration(n) {
+                if self.sub_conns < n {
+                    self.recv_event(&mut ev_rx).await?;
+                }
                 tokio::time::sleep(d).await;
             }
 
@@ -424,6 +427,9 @@ impl BenchLatency {
 
         while n < cfg.pubs.connections {
             if let Some(d) = pacer.get_sleep_duration(n) {
+                if self.pub_conns < n {
+                    self.recv_event(&mut ev_rx).await?;
+                }
                 tokio::time::sleep(d).await;
             }
 

@@ -6,20 +6,23 @@
     */
 
     // local env
-    address: 127.0.0.1:1883
-    accounts:
-    [
-        {
-            user: test1
-            password: 111
-            client_id: "test1@app_id"
-        }
-        {
-            user: test2
-            password: 111
-            client_id: "${*}@app_id" // ${*} for any string
-        }
-    ]
+    env: {
+        address: 127.0.0.1:1883
+        accounts:
+        [
+            {
+                user: test1
+                password: 111
+                client_id: "test1@app_id"
+            }
+            {
+                user: test2
+                password: 111
+                client_id: "${*}@app_id" // ${*} for any string
+            }
+        ]
+    }
+
 
     recv_timeout_ms: 6000
 
