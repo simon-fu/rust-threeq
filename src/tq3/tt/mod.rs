@@ -1,6 +1,10 @@
 use super::tbytes;
 use std::slice::Iter;
 
+pub mod client;
+
+pub mod config;
+
 pub type Error = tbytes::Error;
 
 pub type Protocol = tbytes::Protocol;
@@ -168,4 +172,3 @@ pub fn check(mut stream: Iter<u8>, max_packet_size: usize) -> Result<FixedHeader
     Ok(FixedHeader::new(*byte1, len_len, len))
 }
 
-pub mod client;

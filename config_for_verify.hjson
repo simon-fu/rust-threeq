@@ -21,5 +21,22 @@
         }
     ]
 
-    timeout_seconds: 2
+    recv_timeout_ms: 6000
+
+    pubs: {
+        connections: 1
+        conn_per_sec: 200
+        topic: t1/t2
+        qos: QoS1
+        qps: 10000
+        size: 256
+        payload: "abcdefg",
+        packets: 100
+    }
+    subs: {
+        connections: 100
+        conn_per_sec: 30
+        topic: t1/t2
+        qos: QoS1
+    }
 }

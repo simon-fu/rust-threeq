@@ -21,14 +21,14 @@
 use std::time::Duration;
 
 use clap::Clap;
-use rand::{distributions::Alphanumeric, Rng};
 use rust_threeq::tq3;
 use rust_threeq::tq3::tt;
 use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, Instrument, Span};
+use tt::config::*;
 
-#[macro_use]
-extern crate serde_derive;
+// #[macro_use]
+// extern crate serde_derive;
 
 #[derive(Clap, Debug, Default)]
 #[clap(name = "threeq verify", author, about, version)]
@@ -37,19 +37,6 @@ struct CmdArgs {
     config: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-struct Account {
-    user: Option<String>,
-    password: Option<String>,
-    client_id: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct Config {
-    address: Option<String>,
-    accounts: Vec<Account>,
-    timeout_seconds: u64,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -60,77 +47,6 @@ pub enum Error {
     Generic(String),
 }
 
-const STAR_VAR: &str = "${*}";
-
-struct AccountIter<'a> {
-    iter: std::slice::Iter<'a, Account>,
-    star: Option<&'a Account>,
-}
-
-impl AccountIter<'_> {
-    fn new(accounts: &Vec<Account>) -> AccountIter {
-        let mut o = AccountIter {
-            iter: accounts.iter(),
-            star: None,
-        };
-
-        for v in accounts {
-            if let Some(s) = &v.client_id {
-                if s.contains(STAR_VAR) {
-                    o.star = Some(v);
-                    break;
-                }
-            }
-        }
-
-        o
-    }
-}
-
-impl<'a> Iterator for AccountIter<'a> {
-    type Item = Account;
-    fn next(&mut self) -> Option<Account> {
-        while let Some(a) = self.iter.next() {
-            if let Some(b) = self.star {
-                if a as *const Account != b as *const Account {
-                    return Some(a.clone());
-                } else {
-                    break;
-                }
-            }
-        }
-
-        if let Some(star) = self.star {
-            let mut account = star.clone();
-            if let Some(str) = account.client_id.as_mut() {
-                *str = str.replace(STAR_VAR, &rand_client_id());
-            }
-            return Some(account);
-        }
-
-        None
-    }
-}
-
-fn rand_client_id() -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(8)
-        .map(char::from)
-        .collect()
-}
-
-fn init_conn_pkt(account: &Account, protocol: tt::Protocol) -> tt::Connect {
-    let mut pkt = tt::Connect::new(account.client_id.as_deref().unwrap_or(&rand_client_id()));
-    if account.user.is_some() || account.password.is_some() {
-        pkt.set_login(
-            account.user.as_deref().unwrap_or(""),
-            account.password.as_deref().unwrap_or(""),
-        );
-    }
-    pkt.protocol = protocol;
-    pkt
-}
 
 fn check_publish(rpkt: &tt::Publish, pkt: &tt::Publish, retain: bool) -> Result<(), String> {
     if pkt.qos != rpkt.qos {
@@ -209,11 +125,6 @@ impl<'a> Connector<'a> {
             retain,
         ));
         self
-    }
-
-    #[instrument(skip(self), name = "", level = "debug")]
-    async fn connect000(&mut self, s: &str) -> Result<(), Error> {
-        Ok(())
     }
 
     async fn connect(&mut self, name: &str) -> Result<(), Error> {
@@ -776,27 +687,26 @@ async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), 
 
 #[instrument(skip(cfg), level = "debug")]
 async fn verfiy(cfg: &Config, ver: tt::Protocol) -> Result<(), Error> {
-    let addr = cfg.address.as_ref().unwrap().to_string();
     let args = VArgs {
-        addr,
+        addr: cfg.env.address.clone(),
         protocol: ver,
         topic: "t1/t2".to_string(),
         qos: tt::QoS::AtLeastOnce,
-        timeout: Duration::from_secs(cfg.timeout_seconds),
+        timeout: Duration::from_millis(cfg.recv_timeout_ms),
         payload: vec![0x11u8, 0x22],
     };
 
-    clean_up(&args, AccountIter::new(&cfg.accounts)).await?;
+    clean_up(&args, AccountIter::new(&cfg.env.accounts)).await?;
 
-    verify_basic(&args, AccountIter::new(&cfg.accounts)).await?;
+    verify_basic(&args, AccountIter::new(&cfg.env.accounts)).await?;
 
-    verify_same_client_id(&args, AccountIter::new(&cfg.accounts)).await?;
+    verify_same_client_id(&args, AccountIter::new(&cfg.env.accounts)).await?;
 
-    verify_clean_session(&args, AccountIter::new(&cfg.accounts)).await?;
+    verify_clean_session(&args, AccountIter::new(&cfg.env.accounts)).await?;
 
-    verify_retain(&args, AccountIter::new(&cfg.accounts)).await?;
+    verify_retain(&args, AccountIter::new(&cfg.env.accounts)).await?;
 
-    verify_will(&args, AccountIter::new(&cfg.accounts)).await?;
+    verify_will(&args, AccountIter::new(&cfg.env.accounts)).await?;
 
     Ok(())
 }

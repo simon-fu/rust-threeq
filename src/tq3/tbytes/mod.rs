@@ -70,12 +70,32 @@ pub enum Protocol {
 
 /// Quality of service
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Deserialize, Serialize)]
 pub enum QoS {
     AtMostOnce = 0,
     AtLeastOnce = 1,
     ExactlyOnce = 2,
 }
+
+impl Default for QoS {
+    fn default() -> Self {
+        QoS::AtMostOnce
+    }
+}
+
+impl std::str::FromStr for QoS {
+    type Err = String;
+
+    fn from_str(input: &str) -> Result<QoS, Self::Err> {
+        match input {
+            "QoS0"  => Ok(QoS::AtMostOnce),
+            "QoS1"  => Ok(QoS::AtLeastOnce),
+            "QoS2"  => Ok(QoS::ExactlyOnce),
+            s      => Err(format!("Unknown QoS {}", s)),
+        }
+    }
+}
+
 
 /// Packet type from a byte
 ///
