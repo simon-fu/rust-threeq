@@ -17,7 +17,7 @@ use tt::config::*;
 #[clap(name = "threeq bench", author, about, version)]
 struct CmdArgs {
     #[clap(short = 'c', long = "config", long_about = "config file.")]
-    config: Option<String>,
+    config: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -506,14 +506,15 @@ async fn main() {
     // test();
     let args = CmdArgs::parse();
 
-    let mut cfg = tt::config::Config::default();
-    if let Some(fname) = &args.config {
-        debug!("loading config file [{}]...", fname);
-        let mut c = config::Config::default();
-        c.merge(config::File::with_name(fname)).unwrap();
-        cfg = c.try_into().unwrap();
-        debug!("loaded config file [{}]", fname);
-    }
+    // let mut cfg = tt::config::Config::default();
+    // if let Some(fname) = &args.config {
+    let fname = &args.config;
+    debug!("loading config file [{}]...", fname);
+    let mut c = config::Config::default();
+    c.merge(config::File::with_name(fname)).unwrap();
+    let cfg = c.try_into().unwrap();
+    debug!("loaded config file [{}]", fname);
+    // }
 
     debug!("cfg=[{:?}]", cfg);
 
