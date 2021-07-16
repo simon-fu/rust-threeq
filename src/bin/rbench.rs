@@ -56,8 +56,11 @@ enum TaskEvent {
     SubConnected(Instant),
     PubConnected(Instant),
     Subscribed(Instant),
-    SubFinished(SubStati),
-    PubFinished(PubStati),
+    PubKick(Instant),
+    SubResult(Instant, SubStati),
+    PubResult(Instant, PubStati),
+    SubFinished(u64),
+    PubFinished(u64),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -90,14 +93,14 @@ async fn wait_for_req(rx: &mut ReqRecver) -> Result<TaskReq, Error> {
 }
 
 async fn sub_task(
-    n: u64,
+    subid: u64,
     cfg: Arc<tt::config::Config>,
     acc: Account,
     tx: &EVSender,
     mut rx: ReqRecver,
 ) -> Result<(), Error> {
     let (mut sender, mut receiver) =
-        tt::client::make_connection(&format!("sub{}", n), &cfg.env.address)
+        tt::client::make_connection(&format!("sub{}", subid), &cfg.env.address)
             .await?
             .split();
 
@@ -186,30 +189,33 @@ async fn sub_task(
             }
         }
     }
-
+    let result_time = Instant::now();
     // check lost
     for v in &seqs {
         if *v < cfg.pubs.packets {
             stati.lost += cfg.pubs.packets - *v;
         }
     }
+    let _r = tx.send(TaskEvent::SubResult(result_time, stati)).await;
 
-    let _r = tx.send(TaskEvent::SubFinished(stati)).await;
+    sender.disconnect(tt::Disconnect::new()).await?;
+    // debug!("finished");
+    let _r = tx.send(TaskEvent::SubFinished(subid)).await;
 
     Ok(())
 }
 
 async fn pub_task(
-    n: u64,
+    pubid: u64,
     cfg: Arc<tt::config::Config>,
     acc: Account,
     tx: &EVSender,
     mut rx: ReqRecver,
 ) -> Result<(), Error> {
-    let (mut sender, _recver) = tt::client::make_connection(&format!("pub{}", n), &cfg.env.address)
-        .await?
-        .split();
-    drop(n);
+    let (mut sender, _recver) =
+        tt::client::make_connection(&format!("pub{}", pubid), &cfg.env.address)
+            .await?
+            .split();
 
     let pkt = init_conn_pkt(&acc, tt::Protocol::V4);
     sender.connect(pkt).await?;
@@ -220,21 +226,22 @@ async fn pub_task(
     let mut seq = 0;
     let mut pacer = tq3::limit::Pacer::new(cfg.pubs.qps);
     if let TaskReq::KickXfer(t) = req {
-        pacer = pacer.with_time(t);
         let mut buf = BytesMut::with_capacity(cfg.pubs.size);
         let pkt = tt::Publish::new(&cfg.pubs.topic, cfg.pubs.qos, []);
+        pacer = pacer.with_time(t);
+        let pub_kick = Instant::now();
 
         while seq < cfg.pubs.packets {
             trace!("send No.{} packet", seq);
 
-            if let Some(d) = pacer.get_sleep_duration(n) {
+            if let Some(d) = pacer.get_sleep_duration(seq) {
                 tokio::time::sleep(d).await;
             }
 
             buf.reserve(cfg.pubs.size);
 
             let ts = TS::now_ms();
-            buf.put_u64(n);
+            buf.put_u64(pubid);
             buf.put_u64(seq);
             buf.put_i64(ts);
             let content = cfg.pubs.payload.as_bytes();
@@ -250,18 +257,24 @@ async fn pub_task(
             let _r = sender.publish(pkt0).await?;
             seq += 1;
         }
+        let _r = tx.send(TaskEvent::PubKick(pub_kick)).await;
     }
-
-    sender.disconnect(tt::Disconnect::new()).await?;
+    let t = Instant::now();
+    let elapsed_ms = pacer.kick_time().elapsed().as_millis() as u64;
+    // debug!("elapsed_ms {}", elapsed_ms);
 
     let mut stati = PubStati::default();
-    let elapsed_ms = pacer.kick_time().elapsed().as_millis() as u64;
-    if elapsed_ms > 0 {
+    if elapsed_ms > 1000 {
         stati.qps = cfg.pubs.packets * 1000 / elapsed_ms;
     } else {
         stati.qps = seq;
     }
-    let _r = tx.send(TaskEvent::PubFinished(stati)).await;
+    let _r = tx.send(TaskEvent::PubResult(t, stati)).await;
+
+    sender.disconnect(tt::Disconnect::new()).await?;
+
+    // debug!("finished");
+    let _r = tx.send(TaskEvent::PubFinished(pubid)).await;
 
     Ok(())
 }
@@ -316,20 +329,67 @@ fn print_histogram_percent(name: &str, unit: &str, h: &Histogram) {
     );
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug, Default)]
+struct InstantRange {
+    first: Option<Instant>,
+    last: Option<Instant>,
+}
+
+impl InstantRange {
+    fn update(&mut self, t: Instant) -> bool {
+        if self.first.is_none() {
+            self.first = Some(t);
+            self.last = Some(t);
+            return true;
+        } else {
+            if t < *self.first.as_ref().unwrap() {
+                self.first = Some(t);
+            }
+
+            if t > *self.last.as_ref().unwrap() {
+                self.last = Some(t);
+            }
+            return false;
+        }
+    }
+
+    fn delta_time_range(&self, t: &Instant) -> (Duration, Duration) {
+        (
+            if self.first.is_none() {
+                Duration::from_millis(0)
+            } else {
+                *self.first.as_ref().unwrap() - *t
+            },
+            if self.last.is_none() {
+                Duration::from_millis(0)
+            } else {
+                *self.last.as_ref().unwrap() - *t
+            },
+        )
+    }
+}
+
+#[derive(Debug, Default)]
 struct BenchLatency {
     sub_conns: u64,
     pub_conns: u64,
     subscribes: u64,
+    sub_results: u64,
+    pub_results: u64,
     sub_finished: u64,
     pub_finished: u64,
     sub_stati: SubStati,
     pub_qos_h: Histogram,
+
+    pub_kick_range: InstantRange,
+    pub_result_range: InstantRange,
+    sub_result_range: InstantRange,
 }
 
 impl BenchLatency {
     async fn recv_event(&mut self, ev_rx: &mut EVRecver) -> Result<(), Error> {
         let ev = ev_rx.recv().await.unwrap();
+        // debug!("recv {:?}", ev);
         match ev {
             TaskEvent::Error(e) => {
                 return Err(e);
@@ -343,13 +403,26 @@ impl BenchLatency {
             TaskEvent::Subscribed(_) => {
                 self.subscribes += 1;
             }
-            TaskEvent::SubFinished(s) => {
-                self.sub_finished += 1;
-                self.sub_stati.merge(&s);
+            TaskEvent::PubKick(t) => {
+                self.pub_kick_range.update(t);
             }
-            TaskEvent::PubFinished(s) => {
-                self.pub_finished += 1;
+            TaskEvent::SubResult(t, s) => {
+                self.sub_results += 1;
+                self.sub_stati.merge(&s);
+                if self.sub_result_range.update(t) {
+                    debug!("first sub result");
+                }
+            }
+            TaskEvent::PubResult(t, s) => {
+                self.pub_results += 1;
                 let _r = self.pub_qos_h.increment(s.qps);
+                self.pub_result_range.update(t);
+            }
+            TaskEvent::SubFinished(_n) => {
+                self.sub_finished += 1;
+            }
+            TaskEvent::PubFinished(_n) => {
+                self.pub_finished += 1;
             }
         }
         Ok(())
@@ -376,7 +449,7 @@ impl BenchLatency {
         req_rx: &mut watch::Receiver<TaskReq>,
     ) -> Result<(), Error> {
         let mut accounts = AccountIter::new(&cfg.env.accounts);
-        let (ev_tx, mut ev_rx) = mpsc::channel(1024);
+        let (ev_tx, mut ev_rx) = mpsc::channel(10240);
         // let (req_tx, req_rx) = watch::channel(TaskReq::Ready);
 
         let pacer = tq3::limit::Pacer::new(cfg.subs.conn_per_sec);
@@ -410,7 +483,7 @@ impl BenchLatency {
                     let _r = tx0.send(TaskEvent::Error(e)).await;
                 }
             };
-            let span = tracing::span!(tracing::Level::INFO, "", p = n);
+            let span = tracing::span!(tracing::Level::INFO, "", s = n);
             tokio::spawn(tracing::Instrument::instrument(f, span));
             n += 1;
         }
@@ -448,7 +521,7 @@ impl BenchLatency {
                     let _r = tx0.send(TaskEvent::Error(e)).await;
                 }
             };
-            let span = tracing::span!(tracing::Level::INFO, "", s = n);
+            let span = tracing::span!(tracing::Level::INFO, "", p = n);
             tokio::spawn(tracing::Instrument::instrument(f, span));
             n += 1;
         }
@@ -460,39 +533,55 @@ impl BenchLatency {
         debug!("setup pub connections {} done", cfg.pubs.connections);
 
         // kick publish
+        debug!("-> kick publish");
         let kick_time = Instant::now();
         let _r = req_tx.send(TaskReq::KickXfer(Instant::now()));
 
-        debug!("waiting for pub finished...");
-        while self.pub_finished < cfg.pubs.connections {
+        debug!("waiting for pub result...");
+        while self.pub_results < cfg.pubs.connections {
             self.recv_event(&mut ev_rx).await?;
         }
-        debug!("all pub finished");
+        debug!("recv all pub result");
 
-        debug!("waiting for sub finished...");
-        if let Err(_) = tokio::time::timeout(Duration::from_millis(cfg.recv_timeout_ms), async {
-            while self.sub_finished < cfg.subs.connections {
+        debug!("waiting for sub result...");
+        let r = tokio::time::timeout(Duration::from_millis(cfg.recv_timeout_ms), async {
+            while self.sub_results < cfg.subs.connections {
                 self.recv_event(&mut ev_rx).await?;
             }
             Ok::<(), Error>(())
         })
-        .await
-        {
+        .await;
+
+        if let Err(_) = r {
             // force stop
-            warn!("waiting for sub finished timeout, send stop");
+            warn!("waiting for sub result timeout, send stop");
             let _r = req_tx.send(TaskReq::Stop);
+
+            // wait for sub result again
+            while self.sub_results < cfg.subs.connections {
+                self.recv_event(&mut ev_rx).await?;
+            }
         }
 
-        // wait for sub finished again
-        while self.sub_finished < cfg.subs.connections {
-            self.recv_event(&mut ev_rx).await?;
-        }
         let duration = kick_time.elapsed();
-        debug!("all sub finished");
+        debug!("<- recv all sub result");
+
+        info!("");
+        info!(
+            "Pub kick time  : {:?}",
+            self.pub_kick_range.delta_time_range(&kick_time)
+        );
+        info!(
+            "Pub result time: {:?}",
+            self.pub_result_range.delta_time_range(&kick_time)
+        );
+        info!(
+            "Sub result time: {:?}",
+            self.sub_result_range.delta_time_range(&kick_time)
+        );
+        info!("Duration: {:?}", duration);
 
         self.print(&cfg);
-        info!("");
-        info!("Duration: {:?}", duration);
 
         Ok(())
     }
