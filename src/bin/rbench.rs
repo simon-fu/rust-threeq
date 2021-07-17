@@ -112,8 +112,8 @@ async fn sub_task(
     let _r = tx.send(TaskEvent::SubConnected(Instant::now())).await;
 
     let ack = sender
-        .subscribe(tt::Subscribe::new(&cfg.subs.topic, cfg.subs.qos))
-        .await?;
+    .subscribe(tt::Subscribe::new(&cfg.subs.topic(), cfg.subs.qos))
+    .await?;
     for reason in &ack.return_codes {
         if !reason.is_success() {
             return Err(Error::Generic(format!("{:?}", ack)));
@@ -227,7 +227,7 @@ async fn pub_task(
     let mut pacer = tq3::limit::Pacer::new(cfg.pubs.qps);
     if let TaskReq::KickXfer(t) = req {
         let mut buf = BytesMut::with_capacity(cfg.pubs.size);
-        let pkt = tt::Publish::new(&cfg.pubs.topic, cfg.pubs.qos, []);
+        let pkt = tt::Publish::new(&cfg.pubs.topic(), cfg.pubs.qos, []);
         pacer = pacer.with_time(t);
         let pub_kick = Instant::now();
 
@@ -488,11 +488,14 @@ impl BenchLatency {
             n += 1;
         }
 
-        // wati for sub connections and subscriptions
-        while self.sub_conns < cfg.subs.connections && self.subscribes < cfg.subs.connections {
-            self.recv_event(&mut ev_rx).await?;
+        if cfg.subs.connections > 0 {
+            // wait for sub connections and subscriptions
+            while self.sub_conns < cfg.subs.connections && self.subscribes < cfg.subs.connections {
+                self.recv_event(&mut ev_rx).await?;
+            }
+            info!("setup sub connections {}", cfg.subs.connections);
         }
-        debug!("setup sub connections {} done", cfg.subs.connections);
+ 
 
         let pacer = tq3::limit::Pacer::new(cfg.pubs.conn_per_sec);
         let mut interval = tq3::limit::Interval::new(1000);
@@ -526,45 +529,60 @@ impl BenchLatency {
             n += 1;
         }
 
-        // wait for pub connections
-        while self.pub_conns < cfg.pubs.connections {
-            self.recv_event(&mut ev_rx).await?;
+        if cfg.pubs.connections > 0 {
+            // wait for pub connections
+            while self.pub_conns < cfg.pubs.connections {
+                self.recv_event(&mut ev_rx).await?;
+            }
+            info!("setup pub connections {}", cfg.pubs.connections);
         }
-        debug!("setup pub connections {} done", cfg.pubs.connections);
 
-        // kick publish
-        debug!("-> kick publish");
         let kick_time = Instant::now();
-        let _r = req_tx.send(TaskReq::KickXfer(Instant::now()));
+        if cfg.pubs.connections > 0 && cfg.pubs.packets > 0 {
+            // kick publish
+            debug!("-> kick publish");
+            let _r = req_tx.send(TaskReq::KickXfer(kick_time));
+            
+            debug!("waiting for pub result...");
+            while self.pub_results < cfg.pubs.connections {
+                self.recv_event(&mut ev_rx).await?;
+            }
+            debug!("recv all pub result");
 
-        debug!("waiting for pub result...");
-        while self.pub_results < cfg.pubs.connections {
-            self.recv_event(&mut ev_rx).await?;
-        }
-        debug!("recv all pub result");
+            debug!("waiting for sub result...");
+            let r = tokio::time::timeout(Duration::from_millis(cfg.recv_timeout_ms), async {
+                while self.sub_results < cfg.subs.connections {
+                    self.recv_event(&mut ev_rx).await?;
+                }
+                Ok::<(), Error>(())
+            })
+            .await;
+    
+            if let Err(_) = r {
+                // force stop
+                warn!("waiting for sub result timeout, send stop");
+                let _r = req_tx.send(TaskReq::Stop);
+    
+                // wait for sub result again
+                while self.sub_results < cfg.subs.connections {
+                    self.recv_event(&mut ev_rx).await?;
+                }
+            }
+            debug!("<- recv all sub result");
 
-        debug!("waiting for sub result...");
-        let r = tokio::time::timeout(Duration::from_millis(cfg.recv_timeout_ms), async {
+        } else {
+            debug!("skip publish, waiting for connections down");
+
             while self.sub_results < cfg.subs.connections {
                 self.recv_event(&mut ev_rx).await?;
             }
-            Ok::<(), Error>(())
-        })
-        .await;
 
-        if let Err(_) = r {
-            // force stop
-            warn!("waiting for sub result timeout, send stop");
-            let _r = req_tx.send(TaskReq::Stop);
-
-            // wait for sub result again
-            while self.sub_results < cfg.subs.connections {
+            while self.pub_results < cfg.pubs.connections {
                 self.recv_event(&mut ev_rx).await?;
             }
         }
 
         let duration = kick_time.elapsed();
-        debug!("<- recv all sub result");
 
         info!("");
         info!(
@@ -594,6 +612,20 @@ impl BenchLatency {
     }
 }
 
+
+
+// fn test() {
+//     let text = r"$R{2}/$A{*}@1PGUGY/$R{1}/$R{2}/$R{3}$R{8}/abc";
+//     let maker = VarStr::new(text);
+        
+//     info!("text   : {}", text );
+//     info!("random : {}", maker.random() );
+//     info!("fill(-): {}", maker.fill('-') );
+//     info!("number : {}", maker.number() );
+
+//     std::process::exit(0);
+// }
+
 #[tokio::main]
 async fn main() {
     tq3::log::tracing_subscriber::init();
@@ -607,11 +639,12 @@ async fn main() {
     debug!("loading config file [{}]...", fname);
     let mut c = config::Config::default();
     c.merge(config::File::with_name(fname)).unwrap();
-    let cfg = c.try_into().unwrap();
+    let mut cfg:tt::config::Config = c.try_into().unwrap();
     debug!("loaded config file [{}]", fname);
     // }
 
     debug!("cfg=[{:?}]", cfg);
+    cfg.build();
 
     {
         let cfg = Arc::new(cfg);

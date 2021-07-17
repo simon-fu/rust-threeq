@@ -22,29 +22,30 @@ path = "benches/routers.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-bytes = "1"
-tracing = { version = "0.1", features = ["max_level_trace", "release_max_level_debug"] }
+tokio = { version = "^1.8.1", features = ["full"] }
+bytes = "^1.0.1"
+tracing = { version = "^0.1.26", features = ["max_level_trace", "release_max_level_debug"] }
 tracing-subscriber = "^0.2.19"
 clap = "3.0.0-beta.2"
-ntex-mqtt = "0.6.7"
-mqttbytes="0" 
-futures="0"
-pretty_assertions = "0" # for tbytes
-num_enum = "0.5.1"
-ansi_term= "0.12"
-thiserror = "1"
-config = { version = "0.11.0", features = ["hjson"] }
+ntex-mqtt = "^0.6.9"
+mqttbytes="^0.4.0" 
+futures="^0.3.15"
+pretty_assertions = "^0.7.2" # for tbytes
+num_enum = "^0.5.2"
+ansi_term= "^0.12.1"
+thiserror = "^1.0.26"
+config = { version = "^0.11.0", features = ["hjson"] }
 # config = "0.11.0"
-serde = "1.0.8"
-serde_derive = "1.0.8"
-float-cmp = "0.8"
-rand = "0.8.4"
-histogram = "0.6.9"
+serde = "^1.0.126"
+serde_derive = "^1.0.126"
+float-cmp = "^0.8.0"
+rand = "^0.8.4"
+histogram = "^0.6.9"
 bincode = "^1.3.3"
-chrono = "^0.4"
+chrono = "0.4.19"
 lazy_static = "^1.4.0"
+regex = "^1.5.4"
 
 [dev-dependencies]
-criterion = "^0.3"
+criterion = "^0.3.4"
 

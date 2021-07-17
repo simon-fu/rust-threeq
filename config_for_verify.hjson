@@ -1,8 +1,26 @@
 {
     
     /*
-       - refer: https://hjson.github.io/
-       - ${*} for any string
+        - refer: https://hjson.github.io/
+        
+        - $R{8} for random 8 chars
+
+        - if make connections only
+            - set subs.connections = 0
+            - set pubs.packets = 0 
+            - set pubs.connections = [connections]
+
+        - if publish only
+            - set subs.connections = 0
+
+        - if subscribe only
+            - set pubs.connections = 0
+
+        - if subscribe with random topic
+            - set subs.topic with random str, for example t1/t2/$R{8}
+
+        - if publish with random topic
+            - set pubs.topic with random str, for example t1/t2/$R{8}
     */
 
     // local env
@@ -18,12 +36,14 @@
             {
                 user: test2
                 password: 111
-                client_id: "${*}@app_id" // ${*} for any string
+                client_id: "$R{8}@app_id"
             }
         ]
     }
 
 
+    // After all publish, it indicates timeout for waiting for sub connections receiving all packets 
+    // which avoid infinite waiting if broker drop some packets
     recv_timeout_ms: 6000
 
     pubs: {
