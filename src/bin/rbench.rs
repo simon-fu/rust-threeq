@@ -112,8 +112,8 @@ async fn sub_task(
     let _r = tx.send(TaskEvent::SubConnected(Instant::now())).await;
 
     let ack = sender
-    .subscribe(tt::Subscribe::new(&cfg.subs.topic(), cfg.subs.qos))
-    .await?;
+        .subscribe(tt::Subscribe::new(&cfg.subs.topic(), cfg.subs.qos))
+        .await?;
     for reason in &ack.return_codes {
         if !reason.is_success() {
             return Err(Error::Generic(format!("{:?}", ack)));
@@ -495,7 +495,6 @@ impl BenchLatency {
             }
             info!("setup sub connections {}", cfg.subs.connections);
         }
- 
 
         let pacer = tq3::limit::Pacer::new(cfg.pubs.conn_per_sec);
         let mut interval = tq3::limit::Interval::new(1000);
@@ -542,7 +541,7 @@ impl BenchLatency {
             // kick publish
             debug!("-> kick publish");
             let _r = req_tx.send(TaskReq::KickXfer(kick_time));
-            
+
             debug!("waiting for pub result...");
             while self.pub_results < cfg.pubs.connections {
                 self.recv_event(&mut ev_rx).await?;
@@ -557,19 +556,18 @@ impl BenchLatency {
                 Ok::<(), Error>(())
             })
             .await;
-    
+
             if let Err(_) = r {
                 // force stop
                 warn!("waiting for sub result timeout, send stop");
                 let _r = req_tx.send(TaskReq::Stop);
-    
+
                 // wait for sub result again
                 while self.sub_results < cfg.subs.connections {
                     self.recv_event(&mut ev_rx).await?;
                 }
             }
             debug!("<- recv all sub result");
-
         } else {
             debug!("skip publish, waiting for connections down");
 
@@ -612,12 +610,10 @@ impl BenchLatency {
     }
 }
 
-
-
 // fn test() {
 //     let text = r"$R{2}/$A{*}@1PGUGY/$R{1}/$R{2}/$R{3}$R{8}/abc";
 //     let maker = VarStr::new(text);
-        
+
 //     info!("text   : {}", text );
 //     info!("random : {}", maker.random() );
 //     info!("fill(-): {}", maker.fill('-') );
@@ -639,7 +635,7 @@ async fn main() {
     debug!("loading config file [{}]...", fname);
     let mut c = config::Config::default();
     c.merge(config::File::with_name(fname)).unwrap();
-    let mut cfg:tt::config::Config = c.try_into().unwrap();
+    let mut cfg: tt::config::Config = c.try_into().unwrap();
     debug!("loaded config file [{}]", fname);
     // }
 

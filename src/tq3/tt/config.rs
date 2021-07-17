@@ -55,8 +55,8 @@ pub struct PubArgs {
 }
 
 impl PubArgs {
-    pub fn topic(&self) -> String { 
-        self.topic_maker.as_ref().unwrap().random() 
+    pub fn topic(&self) -> String {
+        self.topic_maker.as_ref().unwrap().random()
     }
 }
 
@@ -75,8 +75,8 @@ pub struct SubArgs {
 }
 
 impl SubArgs {
-    pub fn topic(&self) -> String { 
-        self.topic_maker.as_ref().unwrap().random() 
+    pub fn topic(&self) -> String {
+        self.topic_maker.as_ref().unwrap().random()
     }
 }
 
@@ -149,7 +149,6 @@ impl<'a> Iterator for AccountIter<'a> {
                 *str = self.maker.as_mut().unwrap().random();
             }
             return Some(account);
-            
         }
 
         None
@@ -176,11 +175,10 @@ pub fn init_conn_pkt(account: &Account, protocol: tt::Protocol) -> tt::Connect {
     pkt
 }
 
-
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
-pub struct VarStr{
-    buf:Vec<char>,
-    vars:Vec<(usize, usize)>,
+pub struct VarStr {
+    buf: Vec<char>,
+    vars: Vec<(usize, usize)>,
 }
 
 impl<'t> VarStr {
@@ -190,7 +188,10 @@ impl<'t> VarStr {
         }
 
         let text_vec: Vec<char> = text.chars().collect::<Vec<_>>();
-        let mut self0 = Self{ buf: Vec::new(), vars: Vec::new() };
+        let mut self0 = Self {
+            buf: Vec::new(),
+            vars: Vec::new(),
+        };
         let mut src = 0;
 
         for cap in VAR_STR_RE.captures_iter(text) {
@@ -202,9 +203,9 @@ impl<'t> VarStr {
                 src += 1;
             }
             src = c0.end();
-            
-            self0.vars.push( ( self0.buf.len(), self0.buf.len()+n ) );
-    
+
+            self0.vars.push((self0.buf.len(), self0.buf.len() + n));
+
             for _i in 0..n {
                 self0.buf.push('0');
             }
@@ -231,7 +232,8 @@ impl<'t> VarStr {
     }
 
     pub fn make<F, T>(&self, mut f: F) -> String
-    where F: FnMut(&mut [char]) -> T,
+    where
+        F: FnMut(&mut [char]) -> T,
     {
         let mut buf = self.buf.clone();
         for v in &self.vars {
@@ -241,11 +243,11 @@ impl<'t> VarStr {
     }
 
     pub fn random(&self) -> String {
-        let mut iter = rand::Rng::sample_iter(
-            rand::thread_rng(), 
-            &rand::distributions::Alphanumeric).map(char::from);
+        let mut iter =
+            rand::Rng::sample_iter(rand::thread_rng(), &rand::distributions::Alphanumeric)
+                .map(char::from);
 
-        return self.make(|s|{
+        return self.make(|s| {
             for v in s {
                 *v = iter.next().unwrap();
             }
@@ -253,7 +255,7 @@ impl<'t> VarStr {
     }
 
     pub fn fill(&self, c: char) -> String {
-        return self.make(|s|{
+        return self.make(|s| {
             for v in s {
                 *v = c;
             }
@@ -264,10 +266,10 @@ impl<'t> VarStr {
         lazy_static::lazy_static! {
             static ref NUMBER:Vec<char> = vec!['0', '1', '2', '3', '4', '5', '6', '7', '8', '9',];
         }
-        return self.make(|s|{
+        return self.make(|s| {
             let mut i = 0;
             for v in s {
-                *v = NUMBER[i%NUMBER.len()];
+                *v = NUMBER[i % NUMBER.len()];
                 i += 1;
             }
         });
