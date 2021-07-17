@@ -94,13 +94,14 @@ async fn wait_for_req(rx: &mut ReqRecver) -> Result<TaskReq, Error> {
 
 async fn sub_task(
     subid: u64,
-    cfg: Arc<tt::config::Config>,
+    cfgw: Arc<tt::config::Config>,
     acc: Account,
     tx: &EVSender,
     mut rx: ReqRecver,
 ) -> Result<(), Error> {
+    let cfg = cfgw.raw();
     let (mut sender, mut receiver) =
-        tt::client::make_connection(&format!("sub{}", subid), &cfg.env.address)
+        tt::client::make_connection(&format!("sub{}", subid), &cfgw.env().address)
             .await?
             .split();
 
@@ -112,7 +113,7 @@ async fn sub_task(
     let _r = tx.send(TaskEvent::SubConnected(Instant::now())).await;
 
     let ack = sender
-        .subscribe(tt::Subscribe::new(&cfg.subs.topic(), cfg.subs.qos))
+        .subscribe(tt::Subscribe::new(&cfgw.sub_topic(), cfg.subs.qos))
         .await?;
     for reason in &ack.return_codes {
         if !reason.is_success() {
@@ -207,13 +208,14 @@ async fn sub_task(
 
 async fn pub_task(
     pubid: u64,
-    cfg: Arc<tt::config::Config>,
+    cfgw: Arc<tt::config::Config>,
     acc: Account,
     tx: &EVSender,
     mut rx: ReqRecver,
 ) -> Result<(), Error> {
+    let cfg = cfgw.raw();
     let (mut sender, _recver) =
-        tt::client::make_connection(&format!("pub{}", pubid), &cfg.env.address)
+        tt::client::make_connection(&format!("pub{}", pubid), &cfgw.env().address)
             .await?
             .split();
 
@@ -227,7 +229,7 @@ async fn pub_task(
     let mut pacer = tq3::limit::Pacer::new(cfg.pubs.qps);
     if let TaskReq::KickXfer(t) = req {
         let mut buf = BytesMut::with_capacity(cfg.pubs.size);
-        let pkt = tt::Publish::new(&cfg.pubs.topic(), cfg.pubs.qos, []);
+        let pkt = tt::Publish::new(&cfgw.pub_topic(), cfg.pubs.qos, []);
         pacer = pacer.with_time(t);
         let pub_kick = Instant::now();
 
@@ -430,12 +432,12 @@ impl BenchLatency {
 
     fn print(&self, cfg: &Arc<tt::config::Config>) {
         info!("");
-        info!("Pub connections: {}", cfg.pubs.connections);
-        info!("Pub packets: {} packets/connection", cfg.pubs.packets);
+        info!("Pub connections: {}", cfg.raw().pubs.connections);
+        info!("Pub packets: {} packets/connection", cfg.raw().pubs.packets);
         print_histogram_summary("Pub QPS", "qps/connection", &self.pub_qos_h);
 
         info!("");
-        info!("Sub connections: {}", cfg.subs.connections);
+        info!("Sub connections: {}", cfg.raw().subs.connections);
         info!("Sub recv packets: {}", self.sub_stati.latencyh.entries());
         info!("Sub lost packets: {}", self.sub_stati.lost);
         print_histogram_summary("Sub Latency", "ms", &self.sub_stati.latencyh);
@@ -444,11 +446,17 @@ impl BenchLatency {
 
     pub async fn bench_priv(
         &mut self,
-        cfg: Arc<tt::config::Config>,
+        cfgw: Arc<tt::config::Config>,
         req_tx: &mut watch::Sender<TaskReq>,
         req_rx: &mut watch::Receiver<TaskReq>,
     ) -> Result<(), Error> {
-        let mut accounts = AccountIter::new(&cfg.env.accounts);
+        let cfg = cfgw.raw();
+        info!("");
+        info!("env: [{}]", cfg.env);
+        info!("address: [{}]", cfgw.env().address);
+        info!("");
+
+        let mut accounts = AccountIter::new(&cfgw.env().accounts);
         let (ev_tx, mut ev_rx) = mpsc::channel(10240);
         // let (req_tx, req_rx) = watch::channel(TaskReq::Ready);
 
@@ -473,7 +481,7 @@ impl BenchLatency {
             }
 
             let acc = accounts.next().unwrap();
-            let cfg0 = cfg.clone();
+            let cfg0 = cfgw.clone();
             let tx0 = ev_tx.clone();
             let rx0 = req_rx.clone();
             let f = async move {
@@ -513,7 +521,7 @@ impl BenchLatency {
             }
 
             let acc = accounts.next().unwrap();
-            let cfg0 = cfg.clone();
+            let cfg0 = cfgw.clone();
             let tx0 = ev_tx.clone();
             let rx0 = req_rx.clone();
             let f = async move {
@@ -597,7 +605,7 @@ impl BenchLatency {
         );
         info!("Duration: {:?}", duration);
 
-        self.print(&cfg);
+        self.print(&cfgw);
 
         Ok(())
     }
@@ -629,18 +637,18 @@ async fn main() {
     // test();
     let args = CmdArgs::parse();
 
-    // let mut cfg = tt::config::Config::default();
-    // if let Some(fname) = &args.config {
-    let fname = &args.config;
-    debug!("loading config file [{}]...", fname);
-    let mut c = config::Config::default();
-    c.merge(config::File::with_name(fname)).unwrap();
-    let mut cfg: tt::config::Config = c.try_into().unwrap();
-    debug!("loaded config file [{}]", fname);
-    // }
+    // let fname = &args.config;
+    // debug!("loading config file [{}]...", fname);
+    // let mut c = config::Config::default();
+    // c.merge(config::File::with_name(fname)).unwrap();
+    // let mut cfg: tt::config::Config = c.try_into().unwrap();
+    // debug!("loaded config file [{}]", fname);
 
-    debug!("cfg=[{:?}]", cfg);
-    cfg.build();
+    // debug!("cfg=[{:?}]", cfg);
+    // cfg.build();
+
+    let cfg = tt::config::Config::load_from_file(&args.config);
+    debug!("cfg=[{:#?}]", cfg.raw());
 
     {
         let cfg = Arc::new(cfg);

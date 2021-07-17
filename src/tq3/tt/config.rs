@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::tq3::tt;
 use rand::{distributions::Alphanumeric, Rng};
 
@@ -8,7 +10,7 @@ pub struct Account {
     pub client_id: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct Environment {
     pub address: String,
     pub accounts: Vec<Account>,
@@ -42,7 +44,6 @@ pub struct PubArgs {
     pub connections: u64,
     pub conn_per_sec: u64,
     topic: String,
-    topic_maker: Option<VarStr>,
     #[serde(
         deserialize_with = "tt::QoS::deserialize_with",
         default = "tt::QoS::default"
@@ -54,18 +55,11 @@ pub struct PubArgs {
     pub packets: u64,
 }
 
-impl PubArgs {
-    pub fn topic(&self) -> String {
-        self.topic_maker.as_ref().unwrap().random()
-    }
-}
-
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct SubArgs {
     pub connections: u64,
     pub conn_per_sec: u64,
     topic: String,
-    topic_maker: Option<VarStr>,
 
     #[serde(
         deserialize_with = "tt::QoS::deserialize_with",
@@ -74,24 +68,57 @@ pub struct SubArgs {
     pub qos: tt::QoS,
 }
 
-impl SubArgs {
-    pub fn topic(&self) -> String {
-        self.topic_maker.as_ref().unwrap().random()
-    }
-}
-
 #[derive(Debug, Default, Deserialize, Serialize)]
-pub struct Config {
-    pub env: Environment,
+pub struct Config0 {
+    pub envs: HashMap<String, Environment>,
+    pub env: String,
     pub recv_timeout_ms: u64,
     pub pubs: PubArgs,
     pub subs: SubArgs,
 }
 
+pub struct Config {
+    cfg0: Config0,
+    sub_topic_maker: VarStr,
+    pub_topic_maker: VarStr,
+    env: Option<Environment>,
+}
+
 impl Config {
-    pub fn build(&mut self) {
-        self.subs.topic_maker = Some(VarStr::new(&self.subs.topic));
-        self.pubs.topic_maker = Some(VarStr::new(&self.pubs.topic));
+    pub fn load_from_file(fname: &str) -> Self {
+        let mut c = config::Config::default();
+        c.merge(config::File::with_name(fname)).unwrap();
+        let cfg0: Config0 = c.try_into().unwrap();
+        let mut self0 = Config {
+            sub_topic_maker: VarStr::new(&cfg0.subs.topic),
+            pub_topic_maker: VarStr::new(&cfg0.pubs.topic),
+            cfg0,
+            env: None,
+        };
+
+        if let Some(env) = self0.cfg0.envs.get_mut(&self0.cfg0.env) {
+            //self0.env = env as *mut Environment;
+            self0.env = Some(env.clone());
+        } else {
+            panic!("Not found env {}", self0.cfg0.env);
+        }
+        self0
+    }
+
+    pub fn env(&self) -> &Environment {
+        self.env.as_ref().unwrap()
+    }
+
+    pub fn raw(&self) -> &Config0 {
+        &self.cfg0
+    }
+
+    pub fn pub_topic(&self) -> String {
+        self.pub_topic_maker.random()
+    }
+
+    pub fn sub_topic(&self) -> String {
+        self.sub_topic_maker.random()
     }
 }
 

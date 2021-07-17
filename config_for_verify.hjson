@@ -23,24 +23,25 @@
             - set pubs.topic with random str, for example t1/t2/$R{8}
     */
 
-    // local env
-    env: {
-        address: 127.0.0.1:1883
-        accounts:
-        [
-            {
-                user: test1
-                password: 111
-                client_id: "test1@app_id"
-            }
-            {
-                user: test2
-                password: 111
-                client_id: "$R{8}@app_id"
-            }
-        ]
+    envs: {
+        local: {
+            address: 127.0.0.1:1883
+            accounts:
+            [
+                {
+                    user: test1
+                    password: 111
+                    client_id: "test1@app_id"
+                }
+                {
+                    user: test2
+                    password: 111
+                    client_id: "$R{8}@app_id"
+                }
+            ]
+        }
     }
-
+    env: local
 
     // After all publish, it indicates timeout for waiting for sub connections receiving all packets 
     // which avoid infinite waiting if broker drop some packets
