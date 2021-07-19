@@ -74,7 +74,6 @@ enum TaskReq {
     Stop,
 }
 
-
 #[derive(Debug, Clone, Copy)]
 struct Header {
     pubid: usize,
@@ -85,7 +84,7 @@ struct Header {
 
 impl Header {
     fn new(pubid: usize) -> Self {
-        Self{
+        Self {
             pubid,
             ts: 0,
             seq: 0,
@@ -93,8 +92,8 @@ impl Header {
         }
     }
 
-    fn decode(buf: &mut Bytes) -> Self{
-        Self{
+    fn decode(buf: &mut Bytes) -> Self {
+        Self {
             pubid: buf.get_u32() as usize,
             ts: buf.get_i64(),
             seq: buf.get_u64(),
@@ -103,10 +102,9 @@ impl Header {
     }
 }
 
-
 fn encode_msg(header: &Header, content: &[u8], padding_to_size: usize, buf: &mut BytesMut) {
     let len = 24 + content.len();
-    
+
     buf.reserve(len);
 
     buf.put_u32(header.pubid as u32);
@@ -125,14 +123,12 @@ fn encode_msg(header: &Header, content: &[u8], padding_to_size: usize, buf: &mut
     }
 }
 
-
-
 type EVSender = mpsc::Sender<TaskEvent>;
 type EVRecver = mpsc::Receiver<TaskEvent>;
 type ReqRecver = watch::Receiver<TaskReq>;
 
 #[derive(Debug, Default, Clone, Copy)]
-struct Puber{
+struct Puber {
     next_seq: u64,
     max_seq: u64,
 }
@@ -155,8 +151,7 @@ async fn wait_for_req(rx: &mut ReqRecver) -> Result<TaskReq, Error> {
     return Ok(*rx.borrow());
 }
 
-
-const MAX_PUBS:usize = 10000;
+const MAX_PUBS: usize = 10000;
 
 async fn sub_task(
     subid: u64,
@@ -189,8 +184,6 @@ async fn sub_task(
     }
 
     let _r = tx.send(TaskEvent::Subscribed(Instant::now())).await;
-
-
 
     let mut pubers = vec![Puber::default(); 1];
 
@@ -227,7 +220,10 @@ async fn sub_task(
 
         if header.pubid >= pubers.len() {
             if header.pubid >= MAX_PUBS {
-                error!("pubid exceed limit, expect {} but {}", MAX_PUBS, header.pubid);
+                error!(
+                    "pubid exceed limit, expect {} but {}",
+                    MAX_PUBS, header.pubid
+                );
                 break;
             }
             pubers.resize(header.pubid, Puber::default());
@@ -236,7 +232,6 @@ async fn sub_task(
         let puber = &mut pubers[header.pubid];
         puber.max_seq = header.max_seq;
 
-
         {
             let next_seq = &puber.next_seq;
 
@@ -244,7 +239,8 @@ async fn sub_task(
                 // restart
                 debug!("restart, n {}, npkt {}", header.seq, next_seq);
                 return Err(Error::Generic(format!(
-                    "restart, n {}, npkt {}", header.seq, next_seq
+                    "restart, n {}, npkt {}",
+                    header.seq, next_seq
                 )));
             } else if header.seq < *next_seq {
                 return Err(Error::Generic(format!(
@@ -257,14 +253,19 @@ async fn sub_task(
         }
 
         let latency = TS::now_ms() - header.ts;
-        let _r = tx.send(TaskEvent::RecvPacket(Instant::now(), payload_size, latency as u64)).await;
+        let latency = if latency >= 0 { latency as u64 } else { 0 };
+        let _r = tx
+            .send(TaskEvent::RecvPacket(Instant::now(), payload_size, latency))
+            .await;
         stati.recv_packets += 1;
-        
 
         puber.next_seq = header.seq + 1;
 
         if puber.next_seq > cfg.pubs.packets {
-            error!("seq exceed limit {}, pubid {}", puber.next_seq, header.pubid);
+            error!(
+                "seq exceed limit {}, pubid {}",
+                puber.next_seq, header.pubid
+            );
             break;
         } else if puber.next_seq == cfg.pubs.packets {
             if is_recv_done(&pubers) {
@@ -315,7 +316,6 @@ async fn pub_task(
     let mut pacer = tq3::limit::Pacer::new(cfg.pubs.qps);
 
     if let TaskReq::KickXfer(t) = req {
-
         let mut buf = BytesMut::new();
         let pkt = tt::Publish::new(&cfgw.pub_topic(), cfg.pubs.qos, []);
         pacer = pacer.with_time(t);
@@ -329,13 +329,20 @@ async fn pub_task(
             }
 
             header.ts = TS::now_ms();
-            encode_msg(&header, cfg.pubs.content.as_bytes(), cfg.pubs.padding_to_size, &mut buf);
+            encode_msg(
+                &header,
+                cfg.pubs.content.as_bytes(),
+                cfg.pubs.padding_to_size,
+                &mut buf,
+            );
 
             let mut pkt0 = pkt.clone();
             pkt0.payload = buf.split().freeze();
 
-            let _r = tx.send(TaskEvent::SendPacket(Instant::now(), pkt0.payload.len())).await;
-            
+            let _r = tx
+                .send(TaskEvent::SendPacket(Instant::now(), pkt0.payload.len()))
+                .await;
+
             let _r = sender.publish(pkt0).await?;
             header.seq += 1;
         }
@@ -451,28 +458,27 @@ impl InstantRange {
     }
 }
 
-
-const INTERVAL:Duration = Duration::from_millis(1000);
+const INTERVAL: Duration = Duration::from_millis(1000);
 
 #[derive(Debug)]
-struct PacketSpeedEst{
+struct PacketSpeedEst {
     last_time: Instant,
     next_time: Instant,
     pub_packets: usize,
     pub_bytes: usize,
     sub_packets: usize,
-    sub_bytes: usize
+    sub_bytes: usize,
 }
 
 impl Default for PacketSpeedEst {
     fn default() -> Self {
-        Self{
+        Self {
             last_time: Instant::now(),
             next_time: Instant::now() + INTERVAL,
             pub_packets: 0,
             pub_bytes: 0,
             sub_packets: 0,
-            sub_bytes: 0
+            sub_bytes: 0,
         }
     }
 }
@@ -480,7 +486,7 @@ impl Default for PacketSpeedEst {
 impl PacketSpeedEst {
     fn reset(&mut self, now: Instant) {
         self.last_time = now;
-        self.next_time = now + INTERVAL; 
+        self.next_time = now + INTERVAL;
         self.pub_packets = 0;
         self.pub_bytes = 0;
         self.sub_packets = 0;
@@ -503,15 +509,16 @@ impl PacketSpeedEst {
         if now >= self.next_time {
             let d = (now - self.last_time).as_millis() as usize;
             debug!(
-                "pub [{} q/s, {} KB/s], sub [{} q/s, {} KB/s]", 
-                self.pub_packets*1000/d, self.pub_bytes*1000/d/1000,
-                self.sub_packets*1000/d, self.sub_bytes*1000/d/1000,
-            ) ;
+                "pub [{} q/s, {} KB/s], sub [{} q/s, {} KB/s]",
+                self.pub_packets * 1000 / d,
+                self.pub_bytes * 1000 / d / 1000,
+                self.sub_packets * 1000 / d,
+                self.sub_bytes * 1000 / d / 1000,
+            );
             self.reset(now);
         }
     }
 }
-
 
 #[derive(Debug, Default)]
 struct BenchLatency {
@@ -736,11 +743,11 @@ impl BenchLatency {
         } else {
             debug!("skip publish, waiting for connections down");
 
-            while self.sub_results < cfg.subs.connections {
+            while self.pub_results < cfg.pubs.connections {
                 self.recv_event(&mut ev_rx).await?;
             }
 
-            while self.pub_results < cfg.pubs.connections {
+            while self.sub_results < cfg.subs.connections {
                 self.recv_event(&mut ev_rx).await?;
             }
         }
@@ -776,33 +783,21 @@ impl BenchLatency {
 }
 
 // fn test() {
-//     let text = r"$R{2}/$A{*}@1PGUGY/$R{1}/$R{2}/$R{3}$R{8}/abc";
-//     let maker = VarStr::new(text);
-
-//     info!("text   : {}", text );
-//     info!("random : {}", maker.random() );
-//     info!("fill(-): {}", maker.fill('-') );
-//     info!("number : {}", maker.number() );
-
+//     let now = TS::now_ms();
+//     let mono = TS::mono_ms();
+//     info!("now : {}", now);
+//     info!("mono: {}", mono);
+//     info!("diff: {}", now - mono);
 //     std::process::exit(0);
 // }
 
 #[tokio::main]
 async fn main() {
     tq3::log::tracing_subscriber::init();
-    TS::init();
+
     // test();
+
     let args = CmdArgs::parse();
-
-    // let fname = &args.config;
-    // debug!("loading config file [{}]...", fname);
-    // let mut c = config::Config::default();
-    // c.merge(config::File::with_name(fname)).unwrap();
-    // let mut cfg: tt::config::Config = c.try_into().unwrap();
-    // debug!("loaded config file [{}]", fname);
-
-    // debug!("cfg=[{:?}]", cfg);
-    // cfg.build();
 
     let cfg = tt::config::Config::load_from_file(&args.config);
     debug!("cfg=[{:#?}]", cfg.raw());
@@ -819,6 +814,5 @@ async fn main() {
                 error!("bench result error [{}]", e);
             }
         }
-        // std::process::exit(0);
     }
 }
