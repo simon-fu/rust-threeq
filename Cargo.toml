@@ -15,9 +15,9 @@ edition = "2018"
 # bench = false
 
 [[bench]]
-name = "routers"
+name = "bench-tokio"
 harness = false
-path = "benches/routers.rs"
+path = "benches/bench-tokio.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -47,5 +47,6 @@ lazy_static = "^1.4.0"
 regex = "^1.5.4"
 
 [dev-dependencies]
-criterion = "^0.3.4"
+# criterion = "^0.3.4"
+criterion = { version = "^0.3.4", features = ["async_tokio"] }
 
