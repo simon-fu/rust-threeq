@@ -77,6 +77,7 @@ pub struct Config0 {
     pub subs: SubArgs,
 }
 
+#[derive(Debug, Default)]
 pub struct Config {
     cfg0: Config0,
     sub_topic_maker: VarStr,

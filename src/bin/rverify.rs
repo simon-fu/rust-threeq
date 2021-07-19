@@ -686,25 +686,25 @@ async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), 
 #[instrument(skip(cfg), level = "debug")]
 async fn verfiy(cfg: &Config, ver: tt::Protocol) -> Result<(), Error> {
     let args = VArgs {
-        addr: cfg.env.address.clone(),
+        addr: cfg.env().address.clone(),
         protocol: ver,
         topic: "t1/t2".to_string(),
         qos: tt::QoS::AtLeastOnce,
-        timeout: Duration::from_millis(cfg.recv_timeout_ms),
+        timeout: Duration::from_millis(cfg.raw().recv_timeout_ms),
         payload: vec![0x11u8, 0x22],
     };
 
-    clean_up(&args, AccountIter::new(&cfg.env.accounts)).await?;
+    clean_up(&args, AccountIter::new(&cfg.env().accounts)).await?;
 
-    verify_basic(&args, AccountIter::new(&cfg.env.accounts)).await?;
+    verify_basic(&args, AccountIter::new(&cfg.env().accounts)).await?;
 
-    verify_same_client_id(&args, AccountIter::new(&cfg.env.accounts)).await?;
+    verify_same_client_id(&args, AccountIter::new(&cfg.env().accounts)).await?;
 
-    verify_clean_session(&args, AccountIter::new(&cfg.env.accounts)).await?;
+    verify_clean_session(&args, AccountIter::new(&cfg.env().accounts)).await?;
 
-    verify_retain(&args, AccountIter::new(&cfg.env.accounts)).await?;
+    verify_retain(&args, AccountIter::new(&cfg.env().accounts)).await?;
 
-    verify_will(&args, AccountIter::new(&cfg.env.accounts)).await?;
+    verify_will(&args, AccountIter::new(&cfg.env().accounts)).await?;
 
     Ok(())
 }
@@ -723,14 +723,20 @@ async fn main() {
 
     let args = CmdArgs::parse();
 
-    let mut cfg = Config::default();
-    if let Some(fname) = &args.config {
-        debug!("loading config file [{}]...", fname);
-        let mut c = config::Config::default();
-        c.merge(config::File::with_name(fname)).unwrap();
-        cfg = c.try_into().unwrap();
-        debug!("loaded config file [{}]", fname);
-    }
+    // let mut cfg = Config::default();
+    // if let Some(fname) = &args.config {
+    //     debug!("loading config file [{}]...", fname);
+    //     let mut c = config::Config::default();
+    //     c.merge(config::File::with_name(fname)).unwrap();
+    //     cfg = c.try_into().unwrap();
+    //     debug!("loaded config file [{}]", fname);
+    // }
+
+    let cfg = if let Some(fname) = &args.config {
+        tt::config::Config::load_from_file(fname)
+    } else {
+        tt::config::Config::default()
+    };
 
     debug!("cfg=[{:?}]", cfg);
 
