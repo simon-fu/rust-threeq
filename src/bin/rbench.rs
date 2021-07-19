@@ -34,14 +34,16 @@ pub enum Error {
 
 #[derive(Default, Debug)]
 struct SubStati {
-    latencyh: histogram::Histogram,
-    lost: u64,
+    // latencyh: histogram::Histogram,
+    recv_packets: u64,
+    lost_packets: u64,
 }
 
 impl SubStati {
     fn merge(&mut self, other: &SubStati) {
-        self.latencyh.merge(&other.latencyh);
-        self.lost += other.lost;
+        //self.latencyh.merge(&other.latencyh);
+        self.recv_packets += other.recv_packets;
+        self.lost_packets += other.lost_packets;
     }
 }
 
@@ -56,7 +58,8 @@ enum TaskEvent {
     SubConnected(Instant),
     PubConnected(Instant),
     Subscribed(Instant),
-    PubKick(Instant),
+    PubStart(Instant),
+    PacketLetency(u64),
     SubResult(Instant, SubStati),
     PubResult(Instant, PubStati),
     SubFinished(u64),
@@ -174,11 +177,13 @@ async fn sub_task(
                 *next_seq, seq
             )));
         } else if seq > *next_seq {
-            stati.lost += seq - *next_seq;
+            stati.lost_packets += seq - *next_seq;
         }
 
         let latency = TS::now_ms() - ts;
-        let _r = stati.latencyh.increment(latency as u64);
+        let _r = tx.send(TaskEvent::PacketLetency(latency as u64)).await;
+        stati.recv_packets += 1;
+        // let _r = stati.latencyh.increment(latency as u64);
         *next_seq = seq + 1;
 
         if *next_seq > cfg.pubs.packets {
@@ -194,7 +199,7 @@ async fn sub_task(
     // check lost
     for v in &seqs {
         if *v < cfg.pubs.packets {
-            stati.lost += cfg.pubs.packets - *v;
+            stati.lost_packets += cfg.pubs.packets - *v;
         }
     }
     let _r = tx.send(TaskEvent::SubResult(result_time, stati)).await;
@@ -231,7 +236,7 @@ async fn pub_task(
         let mut buf = BytesMut::with_capacity(cfg.pubs.size);
         let pkt = tt::Publish::new(&cfgw.pub_topic(), cfg.pubs.qos, []);
         pacer = pacer.with_time(t);
-        let pub_kick = Instant::now();
+        let pub_time = Instant::now();
 
         while seq < cfg.pubs.packets {
             trace!("send No.{} packet", seq);
@@ -259,7 +264,7 @@ async fn pub_task(
             let _r = sender.publish(pkt0).await?;
             seq += 1;
         }
-        let _r = tx.send(TaskEvent::PubKick(pub_kick)).await;
+        let _r = tx.send(TaskEvent::PubStart(pub_time)).await;
     }
     let t = Instant::now();
     let elapsed_ms = pacer.kick_time().elapsed().as_millis() as u64;
@@ -380,10 +385,12 @@ struct BenchLatency {
     pub_results: u64,
     sub_finished: u64,
     pub_finished: u64,
+
     sub_stati: SubStati,
+    latencyh: histogram::Histogram,
     pub_qos_h: Histogram,
 
-    pub_kick_range: InstantRange,
+    pub_start_range: InstantRange,
     pub_result_range: InstantRange,
     sub_result_range: InstantRange,
 }
@@ -405,8 +412,11 @@ impl BenchLatency {
             TaskEvent::Subscribed(_) => {
                 self.subscribes += 1;
             }
-            TaskEvent::PubKick(t) => {
-                self.pub_kick_range.update(t);
+            TaskEvent::PubStart(t) => {
+                self.pub_start_range.update(t);
+            }
+            TaskEvent::PacketLetency(d) => {
+                let _r = self.latencyh.increment(d);
             }
             TaskEvent::SubResult(t, s) => {
                 self.sub_results += 1;
@@ -438,10 +448,10 @@ impl BenchLatency {
 
         info!("");
         info!("Sub connections: {}", cfg.raw().subs.connections);
-        info!("Sub recv packets: {}", self.sub_stati.latencyh.entries());
-        info!("Sub lost packets: {}", self.sub_stati.lost);
-        print_histogram_summary("Sub Latency", "ms", &self.sub_stati.latencyh);
-        print_histogram_percent("Sub Latency", "ms", &self.sub_stati.latencyh);
+        info!("Sub recv packets: {}", self.sub_stati.recv_packets);
+        info!("Sub lost packets: {}", self.sub_stati.lost_packets);
+        print_histogram_summary("Sub Latency", "ms", &self.latencyh);
+        print_histogram_percent("Sub Latency", "ms", &self.latencyh);
     }
 
     pub async fn bench_priv(
@@ -495,13 +505,17 @@ impl BenchLatency {
             tokio::spawn(tracing::Instrument::instrument(f, span));
             n += 1;
         }
+        debug!("spawned sub tasks {}", n);
 
         if cfg.subs.connections > 0 {
             // wait for sub connections and subscriptions
             while self.sub_conns < cfg.subs.connections && self.subscribes < cfg.subs.connections {
+                if interval.check() {
+                    debug!("setup sub connections {}", self.sub_conns);
+                }
                 self.recv_event(&mut ev_rx).await?;
             }
-            info!("setup sub connections {}", cfg.subs.connections);
+            info!("setup sub connections {}", self.sub_conns);
         }
 
         let pacer = tq3::limit::Pacer::new(cfg.pubs.conn_per_sec);
@@ -592,8 +606,8 @@ impl BenchLatency {
 
         info!("");
         info!(
-            "Pub kick time  : {:?}",
-            self.pub_kick_range.delta_time_range(&kick_time)
+            "Pub start time  : {:?}",
+            self.pub_start_range.delta_time_range(&kick_time)
         );
         info!(
             "Pub result time: {:?}",
