@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use clap::Clap;
 use histogram::Histogram;
 use rust_threeq::tq3::{self, tt, TS};
@@ -59,7 +59,8 @@ enum TaskEvent {
     PubConnected(Instant),
     Subscribed(Instant),
     PubStart(Instant),
-    PacketLetency(u64),
+    SendPacket(Instant, usize),
+    RecvPacket(Instant, usize, u64),
     SubResult(Instant, SubStati),
     PubResult(Instant, PubStati),
     SubFinished(u64),
@@ -73,14 +74,73 @@ enum TaskReq {
     Stop,
 }
 
+
+#[derive(Debug, Clone, Copy)]
+struct Header {
+    pubid: usize,
+    ts: i64,
+    seq: u64,
+    max_seq: u64,
+}
+
+impl Header {
+    fn new(pubid: usize) -> Self {
+        Self{
+            pubid,
+            ts: 0,
+            seq: 0,
+            max_seq: 0,
+        }
+    }
+
+    fn decode(buf: &mut Bytes) -> Self{
+        Self{
+            pubid: buf.get_u32() as usize,
+            ts: buf.get_i64(),
+            seq: buf.get_u64(),
+            max_seq: buf.get_u64(),
+        }
+    }
+}
+
+
+fn encode_msg(header: &Header, content: &[u8], padding_to_size: usize, buf: &mut BytesMut) {
+    let len = 24 + content.len();
+    
+    buf.reserve(len);
+
+    buf.put_u32(header.pubid as u32);
+    buf.put_i64(header.ts);
+    buf.put_u64(header.seq);
+    buf.put_u64(header.max_seq);
+    buf.put_u32(content.len() as u32);
+    buf.put(content);
+
+    if len < padding_to_size {
+        let remaining = padding_to_size - len;
+        buf.reserve(remaining);
+        unsafe {
+            buf.advance_mut(remaining);
+        }
+    }
+}
+
+
+
 type EVSender = mpsc::Sender<TaskEvent>;
 type EVRecver = mpsc::Receiver<TaskEvent>;
 type ReqRecver = watch::Receiver<TaskReq>;
 
-fn is_recv_done(seqs: &Vec<u64>, packets: u64) -> bool {
+#[derive(Debug, Default, Clone, Copy)]
+struct Puber{
+    next_seq: u64,
+    max_seq: u64,
+}
+
+fn is_recv_done(pubers: &Vec<Puber>) -> bool {
     let mut done = true;
-    for v in seqs {
-        if *v < packets {
+    for v in pubers {
+        if v.next_seq < v.max_seq {
             done = false;
             break;
         }
@@ -94,6 +154,9 @@ async fn wait_for_req(rx: &mut ReqRecver) -> Result<TaskReq, Error> {
     }
     return Ok(*rx.borrow());
 }
+
+
+const MAX_PUBS:usize = 10000;
 
 async fn sub_task(
     subid: u64,
@@ -127,7 +190,9 @@ async fn sub_task(
 
     let _r = tx.send(TaskEvent::Subscribed(Instant::now())).await;
 
-    let mut seqs = vec![0u64; cfg.pubs.connections as usize];
+
+
+    let mut pubers = vec![Puber::default(); 1];
 
     let mut stati = SubStati::default();
 
@@ -157,50 +222,61 @@ async fn sub_task(
             }
         };
 
-        let puber = rpkt.payload.get_u64();
-        let seq = rpkt.payload.get_u64();
-        let ts = rpkt.payload.get_i64();
+        let payload_size = rpkt.payload.len();
+        let header = Header::decode(&mut rpkt.payload);
 
-        if puber >= seqs.len() as u64 {
-            error!("puber exceed limit, expect {} but {}", seqs.len(), puber);
-            break;
+        if header.pubid >= pubers.len() {
+            if header.pubid >= MAX_PUBS {
+                error!("pubid exceed limit, expect {} but {}", MAX_PUBS, header.pubid);
+                break;
+            }
+            pubers.resize(header.pubid, Puber::default());
         }
 
-        let next_seq = &mut seqs[puber as usize];
+        let puber = &mut pubers[header.pubid];
+        puber.max_seq = header.max_seq;
 
-        if seq == 0 && *next_seq > 0 {
-            // restart
-            debug!("restart, n {}, npkt {}", seq, next_seq);
-            break;
-        } else if seq < *next_seq {
-            return Err(Error::Generic(format!(
-                "expect seq {}, but {}",
-                *next_seq, seq
-            )));
-        } else if seq > *next_seq {
-            stati.lost_packets += seq - *next_seq;
+
+        {
+            let next_seq = &puber.next_seq;
+
+            if header.seq == 0 && *next_seq > 0 {
+                // restart
+                debug!("restart, n {}, npkt {}", header.seq, next_seq);
+                return Err(Error::Generic(format!(
+                    "restart, n {}, npkt {}", header.seq, next_seq
+                )));
+            } else if header.seq < *next_seq {
+                return Err(Error::Generic(format!(
+                    "expect seq {}, but {}",
+                    *next_seq, header.seq
+                )));
+            } else if header.seq > *next_seq {
+                stati.lost_packets += header.seq - *next_seq;
+            }
         }
 
-        let latency = TS::now_ms() - ts;
-        let _r = tx.send(TaskEvent::PacketLetency(latency as u64)).await;
+        let latency = TS::now_ms() - header.ts;
+        let _r = tx.send(TaskEvent::RecvPacket(Instant::now(), payload_size, latency as u64)).await;
         stati.recv_packets += 1;
-        // let _r = stati.latencyh.increment(latency as u64);
-        *next_seq = seq + 1;
+        
 
-        if *next_seq > cfg.pubs.packets {
-            error!("seq exceed limit {}, puber {}", next_seq, puber);
+        puber.next_seq = header.seq + 1;
+
+        if puber.next_seq > cfg.pubs.packets {
+            error!("seq exceed limit {}, pubid {}", puber.next_seq, header.pubid);
             break;
-        } else if *next_seq == cfg.pubs.packets {
-            if is_recv_done(&seqs, cfg.pubs.packets) {
+        } else if puber.next_seq == cfg.pubs.packets {
+            if is_recv_done(&pubers) {
                 break;
             }
         }
     }
     let result_time = Instant::now();
     // check lost
-    for v in &seqs {
-        if *v < cfg.pubs.packets {
-            stati.lost_packets += cfg.pubs.packets - *v;
+    for v in &pubers {
+        if v.next_seq < v.max_seq {
+            stati.lost_packets += v.max_seq - v.next_seq;
         }
     }
     let _r = tx.send(TaskEvent::SubResult(result_time, stati)).await;
@@ -232,41 +308,38 @@ async fn pub_task(
     let _r = tx.send(TaskEvent::PubConnected(Instant::now())).await;
 
     let req = wait_for_req(&mut rx).await?;
-    let mut seq = 0;
+
+    let mut header = Header::new(pubid as usize);
+    header.max_seq = cfg.pubs.packets;
+
     let mut pacer = tq3::limit::Pacer::new(cfg.pubs.qps);
+
     if let TaskReq::KickXfer(t) = req {
-        let mut buf = BytesMut::with_capacity(cfg.pubs.size);
+
+        let mut buf = BytesMut::new();
         let pkt = tt::Publish::new(&cfgw.pub_topic(), cfg.pubs.qos, []);
         pacer = pacer.with_time(t);
-        let pub_time = Instant::now();
+        let start_time = Instant::now();
 
-        while seq < cfg.pubs.packets {
-            trace!("send No.{} packet", seq);
+        while header.seq < cfg.pubs.packets {
+            trace!("send No.{} packet", header.seq);
 
-            if let Some(d) = pacer.get_sleep_duration(seq) {
+            if let Some(d) = pacer.get_sleep_duration(header.seq) {
                 tokio::time::sleep(d).await;
             }
 
-            buf.reserve(cfg.pubs.size);
-
-            let ts = TS::now_ms();
-            buf.put_u64(pubid);
-            buf.put_u64(seq);
-            buf.put_i64(ts);
-            let content = cfg.pubs.payload.as_bytes();
-            buf.put_u64(content.len() as u64);
-            buf.put(content);
-            let remaining = cfg.pubs.size - buf.len();
-            unsafe {
-                buf.advance_mut(remaining);
-            }
+            header.ts = TS::now_ms();
+            encode_msg(&header, cfg.pubs.content.as_bytes(), cfg.pubs.padding_to_size, &mut buf);
 
             let mut pkt0 = pkt.clone();
             pkt0.payload = buf.split().freeze();
+
+            let _r = tx.send(TaskEvent::SendPacket(Instant::now(), pkt0.payload.len())).await;
+            
             let _r = sender.publish(pkt0).await?;
-            seq += 1;
+            header.seq += 1;
         }
-        let _r = tx.send(TaskEvent::PubStart(pub_time)).await;
+        let _r = tx.send(TaskEvent::PubStart(start_time)).await;
     }
     let t = Instant::now();
     let elapsed_ms = pacer.kick_time().elapsed().as_millis() as u64;
@@ -276,7 +349,7 @@ async fn pub_task(
     if elapsed_ms > 1000 {
         stati.qps = cfg.pubs.packets * 1000 / elapsed_ms;
     } else {
-        stati.qps = seq;
+        stati.qps = header.seq;
     }
     let _r = tx.send(TaskEvent::PubResult(t, stati)).await;
 
@@ -378,6 +451,68 @@ impl InstantRange {
     }
 }
 
+
+const INTERVAL:Duration = Duration::from_millis(1000);
+
+#[derive(Debug)]
+struct PacketSpeedEst{
+    last_time: Instant,
+    next_time: Instant,
+    pub_packets: usize,
+    pub_bytes: usize,
+    sub_packets: usize,
+    sub_bytes: usize
+}
+
+impl Default for PacketSpeedEst {
+    fn default() -> Self {
+        Self{
+            last_time: Instant::now(),
+            next_time: Instant::now() + INTERVAL,
+            pub_packets: 0,
+            pub_bytes: 0,
+            sub_packets: 0,
+            sub_bytes: 0
+        }
+    }
+}
+
+impl PacketSpeedEst {
+    fn reset(&mut self, now: Instant) {
+        self.last_time = now;
+        self.next_time = now + INTERVAL; 
+        self.pub_packets = 0;
+        self.pub_bytes = 0;
+        self.sub_packets = 0;
+        self.sub_bytes = 0;
+    }
+
+    fn inc_pub(&mut self, now: Instant, packets: usize, bytes: usize) {
+        self.pub_packets += packets;
+        self.pub_bytes += bytes;
+        self.check(now);
+    }
+
+    fn inc_sub(&mut self, now: Instant, packets: usize, bytes: usize) {
+        self.sub_packets += packets;
+        self.sub_bytes += bytes;
+        self.check(now);
+    }
+
+    fn check(&mut self, now: Instant) {
+        if now >= self.next_time {
+            let d = (now - self.last_time).as_millis() as usize;
+            debug!(
+                "pub [{} q/s, {} KB/s], sub [{} q/s, {} KB/s]", 
+                self.pub_packets*1000/d, self.pub_bytes*1000/d/1000,
+                self.sub_packets*1000/d, self.sub_bytes*1000/d/1000,
+            ) ;
+            self.reset(now);
+        }
+    }
+}
+
+
 #[derive(Debug, Default)]
 struct BenchLatency {
     sub_conns: u64,
@@ -395,6 +530,8 @@ struct BenchLatency {
     pub_start_range: InstantRange,
     pub_result_range: InstantRange,
     sub_result_range: InstantRange,
+
+    packet_speed: PacketSpeedEst,
 }
 
 impl BenchLatency {
@@ -417,8 +554,12 @@ impl BenchLatency {
             TaskEvent::PubStart(t) => {
                 self.pub_start_range.update(t);
             }
-            TaskEvent::PacketLetency(d) => {
+            TaskEvent::SendPacket(_t, size) => {
+                self.packet_speed.inc_pub(Instant::now(), 1, size);
+            }
+            TaskEvent::RecvPacket(_t, size, d) => {
                 let _r = self.latencyh.increment(d);
+                self.packet_speed.inc_sub(Instant::now(), 1, size);
             }
             TaskEvent::SubResult(t, s) => {
                 self.sub_results += 1;
@@ -604,7 +745,7 @@ impl BenchLatency {
             }
         }
 
-        let duration = kick_time.elapsed();
+        let elapsed = kick_time.elapsed();
 
         info!("");
         info!(
@@ -619,7 +760,7 @@ impl BenchLatency {
             "Sub result time: {:?}",
             self.sub_result_range.delta_time_range(&kick_time)
         );
-        info!("Duration: {:?}", duration);
+        debug!("Elapsed: {:?}", elapsed);
 
         self.print(&cfgw);
 

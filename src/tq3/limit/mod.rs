@@ -93,22 +93,23 @@ impl Pacer {
 
 #[derive(Debug)]
 pub struct Interval {
-    next_time: Instant,
+    time: Instant,
     milli: u64,
 }
 
 impl Interval {
     pub fn new(milli: u64) -> Self {
         Interval {
-            next_time: Instant::now() + std::time::Duration::from_millis(milli),
+            time: Instant::now(),
             milli,
         }
     }
 
     pub fn check(&mut self) -> bool {
+        let next = self.time + std::time::Duration::from_millis(self.milli);
         let now = Instant::now();
-        if now >= self.next_time {
-            self.next_time = now + std::time::Duration::from_millis(self.milli);
+        if now >= next {
+            self.time = now + std::time::Duration::from_millis(self.milli);
             return true;
         } else {
             return false;

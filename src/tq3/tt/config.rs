@@ -56,8 +56,8 @@ pub struct PubArgs {
     )]
     pub qos: tt::QoS,
     pub qps: u64,
-    pub size: usize,
-    pub payload: String,
+    pub padding_to_size: usize,
+    pub content: String,
     pub packets: u64,
 }
 
