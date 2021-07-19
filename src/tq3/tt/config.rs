@@ -39,10 +39,16 @@ impl DeserializeWith for tt::QoS {
     }
 }
 
+fn default_keep_alive_secs() -> u64 {
+    30
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct PubArgs {
     pub connections: u64,
     pub conn_per_sec: u64,
+    #[serde(default = "default_keep_alive_secs")]
+    pub keep_alive_secs: u64,
     topic: String,
     #[serde(
         deserialize_with = "tt::QoS::deserialize_with",
@@ -59,8 +65,9 @@ pub struct PubArgs {
 pub struct SubArgs {
     pub connections: u64,
     pub conn_per_sec: u64,
+    #[serde(default = "default_keep_alive_secs")]
+    pub keep_alive_secs: u64,
     topic: String,
-
     #[serde(
         deserialize_with = "tt::QoS::deserialize_with",
         default = "tt::QoS::default"

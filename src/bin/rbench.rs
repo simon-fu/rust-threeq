@@ -108,7 +108,8 @@ async fn sub_task(
             .await?
             .split();
 
-    let pkt = init_conn_pkt(&acc, tt::Protocol::V4);
+    let mut pkt = init_conn_pkt(&acc, tt::Protocol::V4);
+    pkt.keep_alive = cfgw.raw().subs.keep_alive_secs as u16;
     let ack = sender.connect(pkt).await?;
     if ack.code != tt::ConnectReturnCode::Success {
         return Err(Error::Generic(format!("{:?}", ack)));
@@ -224,7 +225,8 @@ async fn pub_task(
             .await?
             .split();
 
-    let pkt = init_conn_pkt(&acc, tt::Protocol::V4);
+    let mut pkt = init_conn_pkt(&acc, tt::Protocol::V4);
+    pkt.keep_alive = cfgw.raw().pubs.keep_alive_secs as u16;
     sender.connect(pkt).await?;
     drop(acc);
     let _r = tx.send(TaskEvent::PubConnected(Instant::now())).await;
