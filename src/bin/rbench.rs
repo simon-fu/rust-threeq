@@ -782,12 +782,53 @@ impl BenchLatency {
     }
 }
 
-// fn test() {
-//     let now = TS::now_ms();
-//     let mono = TS::mono_ms();
-//     info!("now : {}", now);
-//     info!("mono: {}", mono);
-//     info!("diff: {}", now - mono);
+// async fn test() {
+
+//     const MAX_TOPICS: usize = 300;
+//     const USED_TOPICS: usize = 2;
+//     const QUE_MAX_SIZE: usize = 8;
+
+//     let mut hubs:Vec<Arc<tt::topic::Hub>> = Vec::new();
+//     for n in 0..MAX_TOPICS {
+//         let name = &format!("t/t{}", n);
+//         hubs.push(Arc::new(tt::topic::Hub::with_name(name, QUE_MAX_SIZE)));
+//     }
+
+//     let mut subs = tt::topic::Subscriptions::default();    
+//     hubs[0].subscribe(&mut subs).await;
+    
+//     let mut sent = 0 as usize;
+//     hubs[0].push(tt::Publish::new(hubs[0].que().name(), tt::QoS::AtLeastOnce, [])).await;
+//     hubs[1].push(tt::Publish::new(hubs[1].que().name(), tt::QoS::AtLeastOnce, [])).await;
+//     sent += 1;
+
+//     hubs[1].subscribe(&mut subs).await;
+
+//     let h = tokio::spawn(async move {
+//         loop {
+//             let r = subs.recv().await;
+//             if r.is_none() {
+//                 debug!("recv none");
+//                 break;
+//             }
+            
+//             let (sub, r) = r.unwrap();
+//             debug!("from topic {}, r {:?}", sub.topic(), r );
+//             while let Some((ver, _pkt)) = sub.next().await {
+//                 debug!("  packet ver {}, q {}", ver, sub.que().read().await.len());
+//             }
+//         }
+//     });
+
+//     while sent < QUE_MAX_SIZE {
+//         for n in 0..USED_TOPICS {
+//             hubs[n].push(tt::Publish::new(hubs[n].que().name(), tt::QoS::AtLeastOnce, [])).await;
+//         }
+//         sent += 1;
+//     }
+
+//     let _r = tokio::join!(h);
+
 //     std::process::exit(0);
 // }
 
@@ -795,7 +836,7 @@ impl BenchLatency {
 async fn main() {
     tq3::log::tracing_subscriber::init();
 
-    // test();
+    // test().await;
 
     let args = CmdArgs::parse();
 

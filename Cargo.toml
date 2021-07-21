@@ -23,6 +23,7 @@ path = "benches/bench-tokio.rs"
 
 [dependencies]
 tokio = { version = "^1.8.1", features = ["full"] }
+tokio-stream = { version = "^0.1.7", features = ["sync"] }
 bytes = "^1.0.1"
 tracing = { version = "^0.1.26", features = ["max_level_trace", "release_max_level_debug"] }
 tracing-subscriber = "^0.2.19"

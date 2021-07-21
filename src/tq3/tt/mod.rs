@@ -5,6 +5,8 @@ pub mod client;
 
 pub mod config;
 
+pub mod topic;
+
 pub type Error = tbytes::Error;
 
 pub type Protocol = tbytes::Protocol;
@@ -14,6 +16,9 @@ pub type FixedHeader = tbytes::FixedHeader;
 pub type PacketType = tbytes::PacketType;
 
 pub type QoS = tbytes::QoS;
+
+pub type Message = Publish;
+
 
 // pub type Packet = tbytes::v5::Packet;
 
