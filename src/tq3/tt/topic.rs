@@ -1,16 +1,15 @@
-
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
-use tokio_stream::StreamExt;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamMap;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
+use tokio_stream::StreamMap;
 
 use super::Message;
 // pub type Packet = u64;
@@ -21,27 +20,27 @@ pub type VerType = u64;
 pub struct VerQue<T> {
     max_size: usize,
     curr_ver: VerType,
-    data: VecDeque<(VerType, T)>
+    data: VecDeque<(VerType, T)>,
 }
 
 impl<T> VerQue<T> {
-    pub fn new(max_size: usize) -> Self{
-        Self{
+    pub fn new(max_size: usize) -> Self {
+        Self {
             max_size,
             curr_ver: 0,
             data: VecDeque::default(),
         }
     }
 
-    pub fn next_ver(&self) -> VerType{
-        self.curr_ver+1
+    pub fn next_ver(&self) -> VerType {
+        self.curr_ver + 1
     }
 
-    pub fn len(&self) -> usize{
+    pub fn len(&self) -> usize {
         self.data.len()
     }
 
-    pub fn push(&mut self, v: T) -> VerType{
+    pub fn push(&mut self, v: T) -> VerType {
         self.curr_ver += 1;
         self.data.push_back((self.curr_ver, v));
         while self.data.len() > self.max_size {
@@ -50,24 +49,23 @@ impl<T> VerQue<T> {
         self.curr_ver
     }
 
-    pub fn inc_ver(&mut self) -> VerType{
+    pub fn inc_ver(&mut self) -> VerType {
         self.curr_ver += 1;
         self.curr_ver
     }
 
-    pub fn next(&self, ver: VerType) -> Option<&(VerType, T)>{
-        if self.data.len() == 0 || ver > self.curr_ver{
+    pub fn next(&self, ver: VerType) -> Option<&(VerType, T)> {
+        if self.data.len() == 0 || ver > self.curr_ver {
             return None;
         }
 
-        let reversed_index = (self.curr_ver - ver + 1) as usize ;
+        let reversed_index = (self.curr_ver - ver + 1) as usize;
         let index = if reversed_index <= self.data.len() {
             self.data.len() - reversed_index
         } else {
             0
         };
         return self.data.get(index);
-
 
         // let (s0, s1) = self.que.as_slices();
         // if let Some(item) = s0.last() {
@@ -121,7 +119,7 @@ impl Que {
     pub fn new(name: &str, max_size: usize) -> Self {
         Self {
             name: name.to_string(),
-            rw: RwLock::new( VerQue::new(max_size) )
+            rw: RwLock::new(VerQue::new(max_size)),
         }
     }
 
@@ -168,7 +166,7 @@ impl Hub {
     pub async fn push(&self, packet: Message) -> VerType {
         let mut que = self.que.rw.write().await;
         let ver = if self.tx.receiver_count() > 0 {
-            que.push(QueItem::new(self.tx.receiver_count(), Arc::new(packet)) )
+            que.push(QueItem::new(self.tx.receiver_count(), Arc::new(packet)))
         } else {
             que.inc_ver()
         };
@@ -178,7 +176,7 @@ impl Hub {
 
     pub async fn subscribe(&self, subs: &mut Subscriptions) -> Option<Arc<Suber>> {
         let rx = BroadcastStream::new(self.tx.subscribe());
-        let sub = Arc::new( Suber::new(self.que.clone(), self.que.next_ver().await) );
+        let sub = Arc::new(Suber::new(self.que.clone(), self.que.next_ver().await));
         if subs.map.contains_key(&sub) {
             return None;
         }
@@ -193,9 +191,7 @@ impl PartialEq for Hub {
     }
 }
 
-impl Eq for Hub {
-
-}
+impl Eq for Hub {}
 
 impl std::hash::Hash for Hub {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -211,8 +207,8 @@ pub struct Suber {
 
 impl Suber {
     fn new(que: Arc<Que>, ver: VerType) -> Self {
-        Self{
-            que, 
+        Self {
+            que,
             ver: AtomicU64::new(ver),
         }
     }
@@ -229,7 +225,7 @@ impl Suber {
         let que = self.que.rw.read().await;
         let r = que.next(self.ver.load(Ordering::Relaxed));
         if let Some((ver, item)) = r {
-            self.ver.store(ver+1, Ordering::Relaxed);
+            self.ver.store(ver + 1, Ordering::Relaxed);
             item.refs.fetch_sub(1, Ordering::Relaxed);
             return Some((*ver, item.msg.clone()));
         }
@@ -243,16 +239,13 @@ impl PartialEq for Suber {
     }
 }
 
-impl Eq for Suber {
-
-}
+impl Eq for Suber {}
 
 impl std::hash::Hash for Suber {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.que.name.hash(state);
     }
 }
-
 
 #[derive(Debug, Default)]
 pub struct Subscriptions {
@@ -264,6 +257,3 @@ impl Subscriptions {
         return self.map.next().await;
     }
 }
-
-
-

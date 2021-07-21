@@ -19,7 +19,6 @@ pub type QoS = tbytes::QoS;
 
 pub type Message = Publish;
 
-
 // pub type Packet = tbytes::v5::Packet;
 
 // pub type Connect = tbytes::v5::Connect;

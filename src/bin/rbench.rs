@@ -794,9 +794,9 @@ impl BenchLatency {
 //         hubs.push(Arc::new(tt::topic::Hub::with_name(name, QUE_MAX_SIZE)));
 //     }
 
-//     let mut subs = tt::topic::Subscriptions::default();    
+//     let mut subs = tt::topic::Subscriptions::default();
 //     hubs[0].subscribe(&mut subs).await;
-    
+
 //     let mut sent = 0 as usize;
 //     hubs[0].push(tt::Publish::new(hubs[0].que().name(), tt::QoS::AtLeastOnce, [])).await;
 //     hubs[1].push(tt::Publish::new(hubs[1].que().name(), tt::QoS::AtLeastOnce, [])).await;
@@ -811,7 +811,7 @@ impl BenchLatency {
 //                 debug!("recv none");
 //                 break;
 //             }
-            
+
 //             let (sub, r) = r.unwrap();
 //             debug!("from topic {}, r {:?}", sub.topic(), r );
 //             while let Some((ver, _pkt)) = sub.next().await {
