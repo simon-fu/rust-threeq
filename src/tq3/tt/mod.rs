@@ -17,95 +17,30 @@ pub type PacketType = tbytes::PacketType;
 
 pub type QoS = tbytes::QoS;
 
-pub type Message = Publish;
-
-// pub type Packet = tbytes::v5::Packet;
-
-// pub type Connect = tbytes::v5::Connect;
-
-// pub type ConnAck = tbytes::v5::ConnAck;
-
-// pub type Publish = tbytes::v5::Publish;
-
-// pub type PubAck = tbytes::v5::PubAck;
-
-// pub type PubRec = tbytes::v5::PubRec;
-
-// pub type PubRel = tbytes::v5::PubRel;
-
-// pub type PubComp = tbytes::v5::PubComp;
-
-// pub type Subscribe = tbytes::v5::Subscribe;
-
-// pub type SubAck = tbytes::v5::SubAck;
-
-// pub type Unsubscribe = tbytes::v5::Unsubscribe;
-
-// pub type UnsubAck = tbytes::v5::UnsubAck;
-
-// pub type PingReq = tbytes::v5::PingReq;
-
-// pub type PingResp = tbytes::v5::PingResp;
-
-// pub type Disconnect = tbytes::v5::Disconnect;
-
-// pub type ConnectReturnCode = tbytes::v5::ConnectReturnCode;
-
-// pub type ConnAckProperties = tbytes::v5::ConnAckProperties;
-
-// pub type SubscribeReasonCode = tbytes::v5::SubscribeReasonCode;
-
-// pub type UnsubAckReason = tbytes::v5::UnsubAckReason;
-
-// pub type ConnectProperties = tbytes::v5::ConnectProperties;
-
-// pub type LastWill = tbytes::v5::LastWill;
-
 pub use tbytes::v5::*;
 
-// pub fn decode_protocol_level(buf : & BytesMut) -> std::io::Result<tbytes::Protocol>{
-//     // Connect Packet
-//     //      byte 0: packet-type:4bit, reserved:4bit
-//     //      byte 1: Remaining Length
-//     //      byte 2~3: 4
-//     //      byte 4~7: 'MQTT'
-//     //      byte 8: level
-//     if buf.len() < 9 {
-//         let error = format!("parsing protocol level: too short {}", buf.len());
-//             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error));
-//     }
+// pub type Message = Publish;
 
-//     let protocol_level = buf[8];
-//     match protocol_level {
-//         4 => return Ok(tbytes::Protocol::V4),
-//         5 => return Ok(tbytes::Protocol::V5),
-//         num => {
-//             let error = format!("unknown mqtt protocol level {}", num);
-//             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error));
-//         },
-//     };
-// }
 
-// pub fn decode_type(byte1: u8)-> Result<PacketType, Error>{
-//     let num = byte1 >> 4;
-//     match num {
-//         1 => Ok(PacketType::Connect),
-//         2 => Ok(PacketType::ConnAck),
-//         3 => Ok(PacketType::Publish),
-//         4 => Ok(PacketType::PubAck),
-//         5 => Ok(PacketType::PubRec),
-//         6 => Ok(PacketType::PubRel),
-//         7 => Ok(PacketType::PubComp),
-//         8 => Ok(PacketType::Subscribe),
-//         9 => Ok(PacketType::SubAck),
-//         10 => Ok(PacketType::Unsubscribe),
-//         11 => Ok(PacketType::UnsubAck),
-//         12 => Ok(PacketType::PingReq),
-//         13 => Ok(PacketType::PingResp),
-//         14 => Ok(PacketType::Disconnect),
-//         _ => Err(Error::InvalidPacketType(num)),
-//     }
-// }
+#[derive(Debug, Clone)]
+pub struct Message {
+    pub id: u64,
+    pub packet: Publish,
+}
+
+impl Message {
+    pub fn new(id: u64, packet: Publish) -> Self {
+        Self {
+            id,
+            packet
+        }
+    }
+}
+
+
+
+
+
 
 pub fn decode_len_len(stream: Iter<u8>) -> Result<(usize, usize), Error> {
     let mut len: usize = 0;

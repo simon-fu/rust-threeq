@@ -1,3 +1,8 @@
+
+pub fn init() {
+    tracing_subscriber::init();
+}
+
 pub mod tracing_subscriber {
     // - 在log里打印node name
     //   https://github.com/tokio-rs/tracing/issues/1039
@@ -108,7 +113,7 @@ pub mod tracing_subscriber {
         }
     }
 
-    pub fn init() {
+    fn do_init() {
         let env_filter = if std::env::var(EnvFilter::DEFAULT_ENV).is_ok() {
             EnvFilter::from_default_env()
         } else {
@@ -120,6 +125,13 @@ pub mod tracing_subscriber {
             .with_env_filter(env_filter)
             .event_format(MyFormatter::default())
             .init();
+    }
+
+    pub fn init() {
+        lazy_static::lazy_static!(
+            static ref INITED: () = do_init();
+        );
+        return *INITED;
     }
 
     pub fn init_with_span_events(kind: tracing_subscriber::fmt::format::FmtSpan) {
