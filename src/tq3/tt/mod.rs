@@ -21,7 +21,6 @@ pub use tbytes::v5::*;
 
 // pub type Message = Publish;
 
-
 #[derive(Debug, Clone)]
 pub struct Message {
     pub id: u64,
@@ -30,17 +29,9 @@ pub struct Message {
 
 impl Message {
     pub fn new(id: u64, packet: Publish) -> Self {
-        Self {
-            id,
-            packet
-        }
+        Self { id, packet }
     }
 }
-
-
-
-
-
 
 pub fn decode_len_len(stream: Iter<u8>) -> Result<(usize, usize), Error> {
     let mut len: usize = 0;

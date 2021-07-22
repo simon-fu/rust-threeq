@@ -1,4 +1,3 @@
-
 pub fn init() {
     tracing_subscriber::init();
 }

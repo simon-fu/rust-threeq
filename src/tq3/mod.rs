@@ -1,4 +1,3 @@
-
 pub mod tt;
 
 pub mod tbytes;
@@ -73,10 +72,9 @@ where
     );
 }
 
-
 // snowflake revised edition
 // reserved: 1 bit
-// time-id: 39bit(origin 41bit), duration years = 2^39/1000/60/60/24/365 ≈ 17 
+// time-id: 39bit(origin 41bit), duration years = 2^39/1000/60/60/24/365 ≈ 17
 // node-id: 12bit(origin 10bit), max nodes = 2^12 = 4096
 // seq-id: 12bit, max qps = 2^12 = 4096/ms = 4096000/sec
 #[derive(Debug)]
@@ -86,11 +84,11 @@ pub struct SnowflakeId {
     last_seq: u64,
 }
 
-const SNOWFLAKE_BASE:u64 = 1609430400000; // 2021-01-01 00:00:00
-const SNOWFLAKE_MAX_SEQ:u64 = 1<<12;
+const SNOWFLAKE_BASE: u64 = 1609430400000; // 2021-01-01 00:00:00
+const SNOWFLAKE_MAX_SEQ: u64 = 1 << 12;
 
 impl SnowflakeId {
-    pub fn new(node_id: u64) -> Self{
+    pub fn new(node_id: u64) -> Self {
         Self {
             node_id: node_id << 12,
             last_ts: 0,
@@ -99,13 +97,13 @@ impl SnowflakeId {
     }
 
     pub fn next(&mut self) -> Result<u64, u64> {
-
         let now = std::time::SystemTime::now();
         let since_the_epoch = now
             .duration_since(std::time::UNIX_EPOCH)
             .expect("Time went backwards");
 
-        let ts = since_the_epoch.as_secs() * 1000 + (since_the_epoch.subsec_nanos() as u64 / 1_000_000);
+        let ts =
+            since_the_epoch.as_secs() * 1000 + (since_the_epoch.subsec_nanos() as u64 / 1_000_000);
         let ts = ts - SNOWFLAKE_BASE;
 
         if ts <= self.last_ts {
@@ -121,7 +119,7 @@ impl SnowflakeId {
             self.last_ts = ts;
             self.last_seq = 0;
         }
-            
+
         let mid = (self.last_ts << 24) | self.node_id | self.last_seq;
         Ok(mid)
     }
@@ -131,10 +129,10 @@ impl SnowflakeId {
             match self.next() {
                 Ok(n) => {
                     return n;
-                },
+                }
                 Err(nanos) => {
                     std::thread::sleep(std::time::Duration::from_nanos(nanos));
-                },
+                }
             }
         }
     }
@@ -144,7 +142,8 @@ impl SnowflakeId {
         let since_the_epoch = now
             .duration_since(std::time::UNIX_EPOCH)
             .expect("Time went backwards");
-        let ts = since_the_epoch.as_secs() * 1000 + (since_the_epoch.subsec_nanos() as u64 / 1_000_000);
+        let ts =
+            since_the_epoch.as_secs() * 1000 + (since_the_epoch.subsec_nanos() as u64 / 1_000_000);
         let ts = ts - SNOWFLAKE_BASE;
 
         if ts <= self.last_ts {
@@ -157,7 +156,7 @@ impl SnowflakeId {
             self.last_ts = ts;
             self.last_seq = 0;
         }
-            
+
         let mid = (self.last_ts << 24) | self.node_id | self.last_seq;
         mid
     }
@@ -169,7 +168,7 @@ pub struct SnowflakeIdSafe {
 }
 
 impl SnowflakeIdSafe {
-    pub fn new(node_id: u64) -> Self{
+    pub fn new(node_id: u64) -> Self {
         Self {
             real: std::sync::Mutex::new(SnowflakeId::new(node_id)),
         }
@@ -190,8 +189,8 @@ impl SnowflakeIdSafe {
 
 #[cfg(test)]
 mod tests {
-    use tracing::error;
     use super::*;
+    use tracing::error;
 
     #[test]
     fn test_snowflake_id_normal() {
@@ -205,7 +204,7 @@ mod tests {
         {
             // warm up
             let mut gen = SnowflakeId::new(111);
-            for _ in 0 .. 1000 {
+            for _ in 0..1000 {
                 let _r = gen.next();
             }
         }
@@ -219,7 +218,6 @@ mod tests {
 
         for round in 0..MAX_ROUNDS {
             for _ in 0..4096 {
-
                 let r = gen.next();
                 if r.is_err() {
                     assert_eq!(expect_err, true);
@@ -237,9 +235,9 @@ mod tests {
                     max_seq = u_seq;
                 }
 
-                assert_eq!( u_node_id, NODE_ID );
+                assert_eq!(u_node_id, NODE_ID);
 
-                if  expect_err {
+                if expect_err {
                     assert_eq!(expect_seq, 0);
                     expect_err = false;
                     //error!("round[{}]: expect_ts {}, u_ts {}, expect_seq {}, u_seq {}", round, expect_ts, u_ts, expect_seq, u_seq);
@@ -247,8 +245,7 @@ mod tests {
                 }
 
                 if u_ts == expect_ts {
-
-                } else if u_ts == (expect_ts+1) {
+                } else if u_ts == (expect_ts + 1) {
                     assert_eq!(round, 0);
                     expect_ts = u_ts;
                     expect_seq = 0;
@@ -257,11 +254,14 @@ mod tests {
                     assert!(false);
                 }
 
-                if  u_seq != expect_seq {
-                    error!("round[{}]: expect_ts {}, u_ts {}, expect_err {}", round, expect_ts, u_ts, expect_err);
-                    assert_eq!( u_seq, expect_seq );
+                if u_seq != expect_seq {
+                    error!(
+                        "round[{}]: expect_ts {}, u_ts {}, expect_err {}",
+                        round, expect_ts, u_ts, expect_err
+                    );
+                    assert_eq!(u_seq, expect_seq);
                 }
-                
+
                 expect_seq += 1;
                 if expect_seq == 4096 {
                     expect_seq = 0;
@@ -270,7 +270,7 @@ mod tests {
                 }
             }
         }
-        
+
         assert_eq!(max_seq, 4095);
     }
 
@@ -282,7 +282,7 @@ mod tests {
         {
             // warm up
             let mut gen = SnowflakeId::new(111);
-            for _ in 0 .. 1000 {
+            for _ in 0..1000 {
                 let _r = gen.next();
             }
         }
@@ -296,7 +296,6 @@ mod tests {
         let mut gen = SnowflakeId::new(NODE_ID);
 
         for round in 0..MAX_ROUNDS {
-            
             for _ in 0..4096 {
                 let uid = gen.next_or_borrow();
 
@@ -307,12 +306,11 @@ mod tests {
                 if u_seq > max_seq {
                     max_seq = u_seq;
                 }
-        
-                assert_eq!( u_node_id, NODE_ID );
+
+                assert_eq!(u_node_id, NODE_ID);
 
                 if u_ts == expect_ts {
-
-                } else if u_ts == (expect_ts+1) {
+                } else if u_ts == (expect_ts + 1) {
                     expect_ts = u_ts;
                     expect_seq = 0;
                 } else {
@@ -320,15 +318,14 @@ mod tests {
                     assert!(false);
                 }
 
-                assert_eq!( u_seq, expect_seq );
+                assert_eq!(u_seq, expect_seq);
                 expect_seq += 1;
                 if expect_seq == 4096 {
                     expect_seq = 0;
                 }
             }
         }
-        
-        assert_eq!(max_seq, 4095);
 
+        assert_eq!(max_seq, 4095);
     }
 }

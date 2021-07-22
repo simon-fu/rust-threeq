@@ -1,9 +1,9 @@
 pub use v1::*;
 
 pub mod v1 {
-    use std::sync::Arc;
-    use crate::tq3::{self, hub};
     use super::super::Message;
+    use crate::tq3::{self, hub};
+    use std::sync::Arc;
 
     pub type Subscriptions = tq3::hub::LatestFirstQue<Arc<Message>>;
     pub type Hub = hub::Hub<Arc<Message>, u64, Subscriptions>;
@@ -19,14 +19,13 @@ pub mod v2 {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
+    use super::super::Message;
     use tokio::sync::broadcast;
     use tokio::sync::RwLock;
     use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
     use tokio_stream::wrappers::BroadcastStream;
     use tokio_stream::StreamExt;
     use tokio_stream::StreamMap;
-    use super::super::Message;
-    
 
     pub type VerType = u64;
 
@@ -36,7 +35,7 @@ pub mod v2 {
         curr_ver: VerType,
         data: VecDeque<(VerType, T)>,
     }
-    
+
     impl<T> VerQue<T> {
         pub fn new(max_size: usize) -> Self {
             Self {
@@ -45,15 +44,15 @@ pub mod v2 {
                 data: VecDeque::default(),
             }
         }
-    
+
         pub fn next_ver(&self) -> VerType {
             self.curr_ver + 1
         }
-    
+
         pub fn len(&self) -> usize {
             self.data.len()
         }
-    
+
         pub fn push(&mut self, v: T) -> VerType {
             self.curr_ver += 1;
             self.data.push_back((self.curr_ver, v));
@@ -62,17 +61,17 @@ pub mod v2 {
             }
             self.curr_ver
         }
-    
+
         pub fn inc_ver(&mut self) -> VerType {
             self.curr_ver += 1;
             self.curr_ver
         }
-    
+
         pub fn next(&self, ver: VerType) -> Option<&(VerType, T)> {
             if self.data.len() == 0 || ver > self.curr_ver {
                 return None;
             }
-    
+
             let reversed_index = (self.curr_ver - ver + 1) as usize;
             let index = if reversed_index <= self.data.len() {
                 self.data.len() - reversed_index
@@ -80,7 +79,7 @@ pub mod v2 {
                 0
             };
             return self.data.get(index);
-    
+
             // let (s0, s1) = self.que.as_slices();
             // if let Some(item) = s0.last() {
             //     if ver <= item.0{
@@ -93,24 +92,24 @@ pub mod v2 {
             //         }
             //     }
             // }
-    
+
             // if let Some(item) = s1.last() {
             //     if ver <= item.0{
             //         let index = s1.len() - 1 - (item.0 - ver) as usize;
             //         return Some(s1[index].clone());
             //     }
             // }
-    
+
             // return None;
         }
     }
-    
+
     #[derive(Debug)]
     pub struct QueItem {
         refs: AtomicUsize,
         msg: Arc<Message>,
     }
-    
+
     impl QueItem {
         fn new(refs: usize, msg: Arc<Message>) -> Self {
             Self {
@@ -119,16 +118,16 @@ pub mod v2 {
             }
         }
     }
-    
+
     pub type QueData = VerQue<QueItem>;
     pub type RWQue = RwLock<QueData>;
-    
+
     #[derive(Debug)]
     pub struct Que {
         name: String,
         rw: RWQue,
     }
-    
+
     impl Que {
         pub fn new(name: &str, max_size: usize) -> Self {
             Self {
@@ -136,28 +135,28 @@ pub mod v2 {
                 rw: RwLock::new(VerQue::new(max_size)),
             }
         }
-    
+
         pub fn name(&self) -> &str {
             &self.name
         }
-    
+
         pub async fn next_ver(&self) -> VerType {
             self.rw.read().await.next_ver()
         }
-    
+
         pub async fn read<'a>(&'a self) -> tokio::sync::RwLockReadGuard<'a, QueData> {
             let guard = self.rw.read().await;
             return guard;
         }
     }
-    
+
     #[derive(Debug)]
     pub struct Hub {
         que: Arc<Que>,
         tx: broadcast::Sender<u64>,
         // rx: broadcast::Receiver<u64>,
     }
-    
+
     impl Hub {
         pub fn new(que: Arc<Que>) -> Self {
             let (tx, _rx) = broadcast::channel(2);
@@ -172,11 +171,11 @@ pub mod v2 {
             let que = Que::new(name, max_size);
             Self::new(Arc::new(que))
         }
-    
+
         pub fn que(&self) -> &Arc<Que> {
             &self.que
         }
-    
+
         pub async fn push(&self, packet: Message) -> VerType {
             let mut que = self.que.rw.write().await;
             let ver = if self.tx.receiver_count() > 0 {
@@ -187,7 +186,7 @@ pub mod v2 {
             let _r = self.tx.send(ver);
             ver
         }
-    
+
         pub async fn subscribe(&self, subs: &mut Subscriptions) -> Option<Arc<Suber>> {
             let rx = BroadcastStream::new(self.tx.subscribe());
             let sub = Arc::new(Suber::new(self.que.clone(), self.que.next_ver().await));
@@ -198,27 +197,27 @@ pub mod v2 {
             Some(sub)
         }
     }
-    
+
     impl PartialEq for Hub {
         fn eq(&self, other: &Self) -> bool {
             self.que.name == other.que.name
         }
     }
-    
+
     impl Eq for Hub {}
-    
+
     impl std::hash::Hash for Hub {
         fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
             self.que.name.hash(state);
         }
     }
-    
+
     #[derive(Debug)]
     pub struct Suber {
         que: Arc<Que>,
         ver: AtomicU64,
     }
-    
+
     impl Suber {
         fn new(que: Arc<Que>, ver: VerType) -> Self {
             Self {
@@ -226,15 +225,15 @@ pub mod v2 {
                 ver: AtomicU64::new(ver),
             }
         }
-    
+
         pub fn topic(&self) -> &str {
             self.que.name()
         }
-    
+
         pub fn que(&self) -> &Arc<Que> {
             &self.que
         }
-    
+
         pub async fn next(&self) -> Option<(VerType, Arc<Message>)> {
             let que = self.que.rw.read().await;
             let r = que.next(self.ver.load(Ordering::Relaxed));
@@ -246,30 +245,31 @@ pub mod v2 {
             return None;
         }
     }
-    
+
     impl PartialEq for Suber {
         fn eq(&self, other: &Self) -> bool {
             self.que.name == other.que.name
         }
     }
-    
+
     impl Eq for Suber {}
-    
+
     impl std::hash::Hash for Suber {
         fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
             self.que.name.hash(state);
         }
     }
-    
+
     #[derive(Debug, Default)]
     pub struct Subscriptions {
         map: StreamMap<Arc<Suber>, BroadcastStream<u64>>,
     }
-    
+
     impl Subscriptions {
-        pub async fn recv(&mut self) -> Option<(Arc<Suber>, Result<u64, BroadcastStreamRecvError>)> {
+        pub async fn recv(
+            &mut self,
+        ) -> Option<(Arc<Suber>, Result<u64, BroadcastStreamRecvError>)> {
             return self.map.next().await;
         }
     }
-    
 }

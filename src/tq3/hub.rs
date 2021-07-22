@@ -1,30 +1,24 @@
-use std::{collections::{HashMap, VecDeque}, sync::Arc};
-use tokio::sync::{Mutex, Notify, RwLock};
 use async_trait::async_trait;
 use std::marker::PhantomData;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
+use tokio::sync::{Mutex, Notify, RwLock};
 
 #[async_trait]
-pub trait Sub<T: Send>{
-    async fn push<>(&self, msg: &T);
+pub trait Sub<T: Send> {
+    async fn push(&self, msg: &T);
 }
 
 #[derive(Debug, Default)]
-pub struct Hub < 
-    T: Send,
-    K:std::cmp::Eq + std::hash::Hash, 
-    SubT: Sub<T> > 
-{
-    subs: RwLock< HashMap<K, Arc<SubT> > > ,
+pub struct Hub<T: Send, K: std::cmp::Eq + std::hash::Hash, SubT: Sub<T>> {
+    subs: RwLock<HashMap<K, Arc<SubT>>>,
     _p: PhantomData<T>,
 }
 
-impl<
-    T: Send, 
-    K:std::cmp::Eq+ std::hash::Hash, 
-    SubT: Sub<T> 
-    > 
-    Hub<T, K, SubT> {
-    pub fn new() -> Self{
+impl<T: Send, K: std::cmp::Eq + std::hash::Hash, SubT: Sub<T>> Hub<T, K, SubT> {
+    pub fn new() -> Self {
         Self {
             subs: RwLock::new(HashMap::new()),
             _p: PhantomData,
@@ -54,12 +48,11 @@ pub enum Error {
 }
 
 #[derive(Debug, Default)]
-struct LatestFirstData<T>{
+struct LatestFirstData<T> {
     que: VecDeque<T>,
     drops: usize,
-    closed: bool ,
+    closed: bool,
 }
-
 
 #[derive(Debug, Default)]
 pub struct LatestFirstQue<T> {
@@ -72,7 +65,7 @@ impl<T: Send> LatestFirstQue<T> {
     pub fn new(max_qsize: usize) -> Self {
         Self {
             max_qsize,
-            data: Mutex::new(LatestFirstData{
+            data: Mutex::new(LatestFirstData {
                 que: VecDeque::new(),
                 drops: 0,
                 closed: false,
@@ -109,13 +102,13 @@ impl<T: Send> LatestFirstQue<T> {
 }
 
 #[async_trait]
-impl<T: Send+Sync+Clone> Sub<T> for LatestFirstQue<T> {
+impl<T: Send + Sync + Clone> Sub<T> for LatestFirstQue<T> {
     async fn push(&self, msg: &T) {
         {
             let mut data = self.data.lock().await;
             if data.closed {
                 // closed, do not produce data any more
-                return ;
+                return;
             }
 
             data.que.push_back(msg.clone());
