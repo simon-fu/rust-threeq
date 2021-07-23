@@ -128,6 +128,8 @@ fn bench_mpsc(group: &mut BenchmarkGroup<'_, measurement::WallTime>) {
         (1, 100_000, 10, qsize),
         (1, 10_000, 100, qsize),
         (1, 1_000, 1000, qsize),
+        (100_000, 1, 1, qsize),
+        (100_000, 1, 2, qsize),
         (100, 10_000, 1, qsize),
         (100, 10_000, 10, qsize),
     ];
@@ -141,11 +143,48 @@ fn bench_mpsc(group: &mut BenchmarkGroup<'_, measurement::WallTime>) {
     }
 }
 
+fn bench_snowflake_id(group: &mut BenchmarkGroup<'_, measurement::WallTime>) {
+    use rust_threeq::tq3::SnowflakeId;
+    let num = 1000_000;
+
+    group.throughput(Throughput::Elements(num));
+    group.bench_function(format!("snowflake_next-{}", num), |b| {
+        b.iter(|| {
+            let mut gen = SnowflakeId::new(1);
+            for _ in 0..num {
+                let _ = gen.next();
+            }
+        })
+    });
+
+    group.throughput(Throughput::Elements(num));
+    group.bench_function(format!("snowflake_next_or_borrow-{}", num), |b| {
+        b.iter(|| {
+            let mut gen = SnowflakeId::new(1);
+            for _ in 0..num {
+                gen.next_or_borrow();
+            }
+        })
+    });
+
+    group.throughput(Throughput::Elements(num));
+    group.bench_function(format!("snowflake_next_or_wait-{}", num), |b| {
+        b.iter(|| {
+            let mut gen = SnowflakeId::new(1);
+            for _ in 0..num {
+                gen.next_or_wait();
+            }
+        })
+    });
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("bench-tokio");
-
     bench_mpsc(&mut group);
+    group.finish();
 
+    let mut group = c.benchmark_group("bench-snowflake");
+    bench_snowflake_id(&mut &mut group);
     group.finish();
 }
 

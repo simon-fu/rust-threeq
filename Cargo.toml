@@ -15,14 +15,14 @@ edition = "2018"
 # bench = false
 
 [[bench]]
-name = "bench-tokio"
+name = "bench-async"
 harness = false
-path = "benches/bench-tokio.rs"
+path = "benches/bench-async.rs"
 
 [[bench]]
-name = "bench-other"
+name = "criterion"
 harness = false
-path = "benches/bench-other.rs"
+path = "benches/criterion.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

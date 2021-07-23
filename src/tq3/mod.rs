@@ -1,3 +1,7 @@
+use std::time::Duration;
+
+use tracing::info;
+
 pub mod tt;
 
 pub mod tbytes;
@@ -7,6 +11,8 @@ pub mod log;
 pub mod limit;
 
 pub mod hub;
+
+pub mod histogram;
 
 lazy_static::lazy_static! {
     static ref BASE:std::time::Instant = std::time::Instant::now();
@@ -53,7 +59,7 @@ impl TS {
     }
 }
 
-pub async fn measure_async<T>(name: &str, num: u64, fut: T)
+pub async fn measure_async<T>(num: u64, fut: T) -> (Duration, u128, u128, u128)
 where
     T: core::future::Future,
 {
@@ -65,8 +71,16 @@ where
     let num = num as u128;
     let each = elapsed.as_nanos() / num;
     let rate = num * 1_000_000_000 / elapsed.as_nanos();
+    return (elapsed, num, each, rate);
+}
 
-    println!(
+pub async fn measure_and_print<T>(name: &str, num: u64, fut: T)
+where
+    T: core::future::Future,
+{
+    let (elapsed, num, each, rate) = measure_async(num, fut).await;
+
+    info!(
         "{}: num {}, elapsed {:?}, each {} ns, estimate {}/sec",
         name, num, elapsed, each, rate
     );

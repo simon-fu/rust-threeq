@@ -832,11 +832,95 @@ impl BenchLatency {
 //     std::process::exit(0);
 // }
 
+async fn test() {
+    // use tq3::hub;
+    use std::sync::Mutex;
+    use tq3::SnowflakeId;
+    use tt::topic::Hub;
+    use tt::topic::Subscriptions;
+    use tt::Message;
+
+    const MAX_TOPICS: usize = 300;
+    const USED_TOPICS: usize = 2;
+    const QUE_MAX_SIZE: usize = 8;
+
+    lazy_static::lazy_static!(
+        static ref ID_MAKER: Mutex<SnowflakeId> = Mutex::new(SnowflakeId::new(123));
+    );
+
+    struct HubW {
+        name: String,
+        hub: Hub,
+    }
+
+    impl HubW {
+        fn new(name: &str) -> Self {
+            Self {
+                name: name.to_string(),
+                hub: Hub::new(),
+            }
+        }
+
+        async fn push(&self, n: usize) {
+            let content = format!("n {}", n);
+            let packet = tt::Publish::new(&self.name, tt::QoS::AtLeastOnce, content);
+            // let mid = ID_MAKER.lock().unwrap().next_or_borrow();
+            let mid = n as u64;
+            let msg = Message::new(mid, packet);
+            self.hub.push(&Arc::new(msg)).await;
+        }
+    }
+
+    let subs = Subscriptions::new(QUE_MAX_SIZE);
+    let subs = Arc::new(subs);
+
+    let mut hubs: Vec<Arc<HubW>> = Vec::new();
+    for n in 0..MAX_TOPICS {
+        hubs.push(Arc::new(HubW::new(&format!("t/t{}", n))));
+    }
+
+    hubs[0].hub.add(1, subs.clone()).await;
+
+    let mut sent = 0 as usize;
+    // hubs[0].hub.push(&Arc::new( (hubs[0].name.clone(), sent)) ).await;
+    // hubs[1].hub.push(&Arc::new( (hubs[1].name.clone(), sent)) ).await;
+    // sent += 1;
+
+    hubs[1].hub.add(1, subs.clone()).await;
+
+    let h = tokio::spawn(async move {
+        loop {
+            match subs.recv().await {
+                Ok((msg, drops)) => {
+                    debug!("recv id {}, drops {}", msg.id, drops);
+                }
+                Err(e) => {
+                    debug!("recv error {:?}", e);
+                }
+            }
+        }
+    });
+
+    while sent < QUE_MAX_SIZE {
+        for n in 0..USED_TOPICS {
+            hubs[n].push(sent).await;
+            // hubs[n].hub.push(&Arc::new( (hubs[n].name.clone(), sent)) ).await;
+            // tokio::time::sleep(Duration::from_nanos(1)).await;
+        }
+        sent += 1;
+    }
+    debug!("final sent={}", sent);
+
+    let _r = tokio::join!(h);
+
+    std::process::exit(0);
+}
+
 #[tokio::main]
 async fn main() {
     tq3::log::tracing_subscriber::init();
 
-    // test().await;
+    test().await;
 
     let args = CmdArgs::parse();
 
