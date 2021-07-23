@@ -28,7 +28,7 @@ struct WakeupArgs {
     #[clap(long, long_about = "num of subscribers", default_value = "100000")]
     subs: u64,
 
-    #[clap(long, long_about = "num of senders", default_value = "0")]
+    #[clap(long, long_about = "num of senders", default_value = "1")]
     senders: u64,
 
     #[clap(long)]
@@ -36,7 +36,6 @@ struct WakeupArgs {
 }
 
 type Message = Instant;
-
 
 #[async_trait]
 trait SyncSender<T> {
@@ -259,28 +258,19 @@ async fn bench_wakeup(args: WakeupArgs) {
         info!("warm up ...");
         run_wakeup("Hub", wakehub_new, wakehub_clone_rx, 1, 10_000).await;
         info!("warm up done");
+        info!("-");
     }
 
-    if args.senders == 0 {
-        info!("-");
-        run_wakeup("Broadcast", broadcast_new, broadcast_clone_rx, 1, 100_000).await;
+    let n1 = args.senders;
+    let n2 = args.subs;
+    info!("-");
+    run_wakeup("Broadcast", broadcast_new, broadcast_clone_rx, n1, n2).await;
 
-        info!("-");
-        run_wakeup("Watch", watch_new, watch_clone_rx, 1, 100_000).await;
+    info!("-");
+    run_wakeup("Watch", watch_new, watch_clone_rx, n1, n2).await;
 
-        info!("-");
-        run_wakeup("Hub", wakehub_new, wakehub_clone_rx, 1, 100_000).await;
-    } else {
-        info!("-");
-        run_wakeup(
-            "Hub",
-            wakehub_new,
-            wakehub_clone_rx,
-            args.senders,
-            args.subs,
-        )
-        .await;
-    }
+    info!("-");
+    run_wakeup("Hub", wakehub_new, wakehub_clone_rx, n1, n2).await;
 }
 
 #[tokio::main]
