@@ -879,14 +879,14 @@ async fn test() {
         hubs.push(Arc::new(HubW::new(&format!("t/t{}", n))));
     }
 
-    hubs[0].hub.add(1, subs.clone()).await;
+    hubs[0].hub.add(1, subs.clone());
 
     let mut sent = 0 as usize;
     // hubs[0].hub.push(&Arc::new( (hubs[0].name.clone(), sent)) ).await;
     // hubs[1].hub.push(&Arc::new( (hubs[1].name.clone(), sent)) ).await;
     // sent += 1;
 
-    hubs[1].hub.add(1, subs.clone()).await;
+    hubs[1].hub.add(1, subs.clone());
 
     let h = tokio::spawn(async move {
         loop {

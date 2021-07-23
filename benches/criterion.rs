@@ -3,6 +3,7 @@
 use std::vec;
 
 use criterion::*;
+use tokio::sync::watch;
 
 async fn run_mpsc_unbounded_channel(nsends: u64, nmsgs: u64, ngroups: u64) {
     let (tx_final, mut rx_final) = tokio::sync::mpsc::unbounded_channel();
@@ -143,6 +144,23 @@ fn bench_mpsc(group: &mut BenchmarkGroup<'_, measurement::WallTime>) {
     }
 }
 
+fn bench_spawn_task(group: &mut BenchmarkGroup<'_, measurement::WallTime>, ntasks: u64) {
+    group.throughput(Throughput::Elements(ntasks));
+    group.bench_function(format!("spawn-task-{}", ntasks), |b| {
+        b.to_async(tokio::runtime::Runtime::new().unwrap())
+            .iter(|| async {
+                let (tx, rx) = watch::channel(0);
+                for _ in 0..ntasks {
+                    let mut rx0 = rx.clone();
+                    tokio::spawn(async move {
+                        let _r = rx0.changed().await;
+                    });
+                }
+                drop(tx);
+            })
+    });
+}
+
 fn bench_snowflake_id(group: &mut BenchmarkGroup<'_, measurement::WallTime>) {
     use rust_threeq::tq3::SnowflakeId;
     let num = 1000_000;
@@ -181,6 +199,7 @@ fn bench_snowflake_id(group: &mut BenchmarkGroup<'_, measurement::WallTime>) {
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("bench-tokio");
     bench_mpsc(&mut group);
+    bench_spawn_task(&mut group, 100_000);
     group.finish();
 
     let mut group = c.benchmark_group("bench-snowflake");
