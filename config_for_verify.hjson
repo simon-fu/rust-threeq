@@ -70,4 +70,15 @@
         topic: t1/t2
         qos: QoS1
     }
+
+    verification: {
+        verify_v4: true
+        verify_v5: true
+        verify_basic: true
+        verify_same_client_id: true
+        verify_clean_session: true
+        verify_retain: true
+        verify_will: true
+        verify_shared: false
+    }
 }

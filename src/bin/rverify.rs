@@ -150,6 +150,20 @@ impl<'a> Connector<'a> {
         return Ok(());
     }
 
+    async fn subscribe1(&mut self, filter: &str, qos: tt::QoS) -> Result<(), Error> {
+        let client = self.client.as_mut().unwrap();
+        let ack = client
+            .sender
+            .subscribe(tt::Subscribe::new(filter, qos))
+            .await?;
+        for reason in &ack.return_codes {
+            if !reason.is_success() {
+                return Err(Error::Generic(format!("{:?}", ack)));
+            }
+        }
+        return Ok(());
+    }
+
     async fn unsubscribe(&mut self) -> Result<(), Error> {
         let client = self.client.as_mut().unwrap();
         let ack = client
@@ -259,6 +273,172 @@ impl<'a> Connector<'a> {
     }
 }
 
+#[derive(Debug)]
+struct SyncConnector<'a> {
+    args: &'a VArgs,
+    pkt: tt::Connect,
+    client: Option<tt::client::SyncClient>,
+}
+
+impl<'a> SyncConnector<'a> {
+    fn new(args: &'a VArgs, account: &'a Account) -> Self {
+        Self {
+            args,
+            pkt: init_conn_pkt(account, args.protocol),
+            client: None,
+        }
+    }
+
+    // fn with_clean_session(mut self, b: bool) -> Self {
+    //     self.pkt.clean_session = b;
+    //     self
+    // }
+
+    // fn with_session_expire(mut self, seconds: u32) -> Self {
+    //     if seconds > 0 {
+    //         if self.pkt.properties.is_none() {
+    //             self.pkt.properties = Some(tt::ConnectProperties::new());
+    //         }
+    //         self.pkt
+    //             .properties
+    //             .as_mut()
+    //             .unwrap()
+    //             .session_expiry_interval = Some(seconds);
+    //         // self.pkt.clean_session = false;
+    //     } else {
+    //         if self.pkt.properties.is_some() {
+    //             self.pkt
+    //                 .properties
+    //                 .as_mut()
+    //                 .unwrap()
+    //                 .session_expiry_interval = None;
+    //         }
+    //         // self.pkt.clean_session = true;
+    //     }
+
+    //     self
+    // }
+
+    // fn with_will(mut self, retain: bool) -> Self {
+    //     self.pkt.last_will = Some(tt::LastWill::new(
+    //         &self.args.topic,
+    //         &*self.args.payload,
+    //         self.args.qos,
+    //         retain,
+    //     ));
+    //     self
+    // }
+
+    async fn connect(&mut self, _name: &str) -> Result<(), Error> {
+        // let name = format!("{:p}", &self);
+        let mut client = tt::client::SyncClient::new();
+        let ack = client.connect(&self.args.addr, &self.pkt).await?;
+        if ack.code != tt::ConnectReturnCode::Success {
+            return Err(Error::Generic(format!("{:?}", ack)));
+        }
+        self.client = Some(client);
+        return Ok(());
+    }
+
+    // async fn subscribe(&mut self) -> Result<(), Error> {
+    //     let client = self.client.as_mut().unwrap();
+
+    //     let ack = client
+    //         .subscribe(&tt::Subscribe::new(&self.args.topic, self.args.qos))
+    //         .await?;
+    //     for reason in &ack.return_codes {
+    //         if !reason.is_success() {
+    //             return Err(Error::Generic(format!("{:?}", ack)));
+    //         }
+    //     }
+    //     return Ok(());
+    // }
+
+    async fn subscribe1(&mut self, filter: &str, qos: tt::QoS) -> Result<(), Error> {
+        let client = self.client.as_mut().unwrap();
+        let ack = client.subscribe(&tt::Subscribe::new(filter, qos)).await?;
+        for reason in &ack.return_codes {
+            if !reason.is_success() {
+                return Err(Error::Generic(format!("{:?}", ack)));
+            }
+        }
+        return Ok(());
+    }
+
+    // async fn unsubscribe(&mut self) -> Result<(), Error> {
+    //     let client = self.client.as_mut().unwrap();
+    //     let ack = client
+    //         .unsubscribe(&tt::Unsubscribe::new(self.args.topic.clone()))
+    //         .await?;
+    //     for reason in &ack.reasons {
+    //         if *reason != tt::UnsubAckReason::Success {
+    //             let str = format!("unsubscribe fail, {:?}", ack);
+    //             error!("{}", str);
+    //             return Err(Error::Generic(str));
+    //         }
+    //     }
+    //     return Ok(());
+    // }
+
+    // async fn publish(&mut self) -> Result<(), Error> {
+    //     let client = self.client.as_mut().unwrap();
+    //     let _r = client
+    //         .publish(&tt::Publish::new(
+    //             &self.args.topic,
+    //             self.args.qos,
+    //             self.args.payload.clone(),
+    //         ))
+    //         .await?;
+    //     Ok(())
+    // }
+
+    // async fn publish1(&mut self, pkt: tt::Publish) -> Result<(), Error> {
+    //     let client = self.client.as_mut().unwrap();
+    //     let _r = client.publish(&pkt).await?;
+    //     Ok(())
+    // }
+
+    // async fn recv_publish0(&mut self) -> Result<(), Error> {
+    //     let rpkt = tt::Publish::new(
+    //         self.args.topic.clone(),
+    //         self.args.qos,
+    //         self.args.payload.clone(),
+    //     );
+    //     return self.recv_publish1(&rpkt).await;
+    // }
+
+    // async fn recv_publish1(&mut self, rpkt: &tt::Publish) -> Result<(), Error> {
+    //     return self.recv_publish2(&rpkt, rpkt.retain).await;
+    // }
+
+    // async fn recv_publish2(&mut self, rpkt: &tt::Publish, retain: bool) -> Result<(), Error> {
+    //     let client = self.client.as_mut().unwrap();
+    //     let pkt = client.recv_publish().await?;
+    //     let r = check_publish(rpkt, &pkt, retain);
+    //     return match r {
+    //         Ok(_) => Ok(()),
+    //         Err(s) => {
+    //             let str =
+    //                 format!("expect recv {:?}, but {:?}, reason {}", rpkt, pkt, s);
+    //             error!("{}", str);
+    //             Err(Error::Generic(str))
+    //         }
+    //     };
+    // }
+
+    async fn disconnect(&mut self) -> Result<(), Error> {
+        let client = self.client.as_mut().unwrap();
+        let _r = client.disconnect(&tt::Disconnect::new()).await?;
+        Ok(())
+    }
+
+    // async fn shutdown(&mut self) -> Result<(), Error> {
+    //     let client = self.client.as_mut().unwrap();
+    //     let _r = client.shutdown().await?;
+    //     Ok(())
+    // }
+}
+
 struct Message {
     pkt: tt::Publish,
 }
@@ -281,7 +461,7 @@ impl Message {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct VArgs {
     addr: String,
     protocol: tt::Protocol,
@@ -683,8 +863,76 @@ async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), 
     Ok(())
 }
 
+#[instrument(skip(args, accounts), name = "shared", level = "debug")]
+async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+    // - will message
+    // - user 1: connect and subscribe
+    // - user 2: connect with will m1 and shutdown socket
+    // - user 1: receive m1
+    // - user 3: connect and subscribe, recevie timeout
+    let shared_filter = format!("$share/group1/{}", args.topic);
+
+    let user1 = accounts.next().unwrap();
+    let user2 = accounts.next().unwrap();
+    let user3 = accounts.next().unwrap();
+    let nmsgs = 20 as usize;
+
+    let mut client1 = SyncConnector::new(args, &user1);
+    client1.connect("client1").await?;
+    client1.subscribe1(&shared_filter, args.qos).await?;
+
+    let mut client2 = Connector::new(&args, &user2);
+    client2.connect("client2").await?;
+    client2.subscribe1(&shared_filter, args.qos).await?;
+
+    let args0 = args.clone();
+    let send_task = async move {
+        let mut client3 = Connector::new(&args0, &user3);
+        client3.connect("client3").await?;
+        for n in 0..nmsgs {
+            debug!("publishing message {}", n);
+            client3.publish().await?;
+            debug!("published message {}", n);
+        }
+        client3.disconnect().await?;
+        Ok::<(), Error>(())
+    };
+
+    let h = tokio::spawn(async move {
+        let r = send_task.await;
+        match r {
+            Ok(_o) => {}
+            Err(e) => {
+                error!("send task error [{}]", e);
+            }
+        }
+    });
+
+    {
+        let mut n = 0usize;
+        while n < 2 {
+            client2.recv_publish0().await?;
+            debug!("got message {}", n);
+            n += 1;
+        }
+        client1.disconnect().await?;
+
+        while n < nmsgs {
+            client2.recv_publish0().await?;
+            debug!("got message {}", n);
+            n += 1;
+        }
+    }
+
+    let _r = h.await;
+    client2.disconnect().await?;
+
+    Ok(())
+}
+
 #[instrument(skip(cfg), level = "debug")]
 async fn verfiy(cfg: &Config, ver: tt::Protocol) -> Result<(), Error> {
+    let verification = cfg.verification();
     let args = VArgs {
         addr: cfg.env().address.clone(),
         protocol: ver,
@@ -696,22 +944,42 @@ async fn verfiy(cfg: &Config, ver: tt::Protocol) -> Result<(), Error> {
 
     clean_up(&args, AccountIter::new(&cfg.env().accounts)).await?;
 
-    verify_basic(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    if verification.verify_basic {
+        verify_basic(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    }
 
-    verify_same_client_id(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    if verification.verify_same_client_id {
+        verify_same_client_id(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    }
 
-    verify_clean_session(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    if verification.verify_clean_session {
+        verify_clean_session(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    }
 
-    verify_retain(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    if verification.verify_retain {
+        verify_retain(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    }
 
-    verify_will(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    if verification.verify_will {
+        verify_will(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    }
+
+    if verification.verify_shared {
+        verify_shared(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    }
 
     Ok(())
 }
 
 async fn run(cfg: Config) -> Result<(), Error> {
-    verfiy(&cfg, tt::Protocol::V4).await?;
-    verfiy(&cfg, tt::Protocol::V5).await?;
+    if cfg.verification().verify_v4 {
+        verfiy(&cfg, tt::Protocol::V4).await?;
+    }
+
+    if cfg.verification().verify_v5 {
+        verfiy(&cfg, tt::Protocol::V5).await?;
+    }
+
     Ok(())
 }
 
@@ -739,6 +1007,9 @@ async fn main() {
     };
 
     debug!("cfg=[{:?}]", cfg);
+    info!("-");
+    info!("env=[{}]", cfg.raw().env);
+    info!("-");
 
     match run(cfg).await {
         Ok(_) => {

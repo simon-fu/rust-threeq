@@ -43,6 +43,14 @@ fn default_keep_alive_secs() -> u64 {
     30
 }
 
+fn bool_true() -> bool {
+    return true;
+}
+
+fn bool_false() -> bool {
+    return false;
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct PubArgs {
     pub connections: u64,
@@ -75,6 +83,51 @@ pub struct SubArgs {
     pub qos: tt::QoS,
 }
 
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+pub struct VerificationArgs {
+    #[serde(default = "bool_true")]
+    pub verify_v4: bool,
+
+    #[serde(default = "bool_true")]
+    pub verify_v5: bool,
+
+    #[serde(default = "bool_true")]
+    pub verify_basic: bool,
+
+    #[serde(default = "bool_true")]
+    pub verify_same_client_id: bool,
+
+    #[serde(default = "bool_true")]
+    pub verify_clean_session: bool,
+
+    #[serde(default = "bool_true")]
+    pub verify_retain: bool,
+
+    #[serde(default = "bool_true")]
+    pub verify_will: bool,
+
+    #[serde(default = "bool_false")]
+    pub verify_shared: bool,
+}
+
+impl VerificationArgs {
+    pub fn default_global() -> &'static Self {
+        lazy_static::lazy_static!(
+            static ref ARG: VerificationArgs = VerificationArgs {
+                verify_v4: true,
+                verify_v5: true,
+                verify_basic: true,
+                verify_same_client_id: true,
+                verify_clean_session: true,
+                verify_retain: true,
+                verify_will: true,
+                verify_shared: true,
+            };
+        );
+        return &ARG;
+    }
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Config0 {
     pub envs: HashMap<String, Environment>,
@@ -82,6 +135,7 @@ pub struct Config0 {
     pub recv_timeout_ms: u64,
     pub pubs: PubArgs,
     pub subs: SubArgs,
+    pub verification: Option<VerificationArgs>,
 }
 
 #[derive(Debug, Default)]
@@ -119,6 +173,13 @@ impl Config {
 
     pub fn raw(&self) -> &Config0 {
         &self.cfg0
+    }
+
+    pub fn verification(&self) -> &VerificationArgs {
+        self.cfg0
+            .verification
+            .as_ref()
+            .unwrap_or(VerificationArgs::default_global())
     }
 
     pub fn pub_topic(&self) -> String {

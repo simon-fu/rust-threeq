@@ -155,6 +155,15 @@ impl Subscribe {
     }
 
     pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
+        return self.encode_with_pktid(protocol, self.pkid, buffer);
+    }
+
+    pub fn encode_with_pktid(
+        &self,
+        protocol: Protocol,
+        pktid: u16,
+        buffer: &mut BytesMut,
+    ) -> Result<usize, Error> {
         // write packet type
         buffer.put_u8(0x82);
 
@@ -163,7 +172,7 @@ impl Subscribe {
         let remaining_len_bytes = write_remaining_length(buffer, remaining_len)?;
 
         // write packet id
-        buffer.put_u16(self.pkid);
+        buffer.put_u16(pktid);
 
         match protocol {
             Protocol::V4 => {

@@ -230,6 +230,18 @@ impl Session {
         }
     }
 
+    fn check_working_state<S: Into<String>>(&self, origin: S) -> Result<(), Error> {
+        if State::Working == self.state || State::Disconnecting == self.state {
+            Ok(())
+        } else {
+            Err(Error::State(format!(
+                "expect working but {:?}, origin {}",
+                self.state,
+                origin.into()
+            )))
+        }
+    }
+
     async fn rsp_packet(&mut self, tx: Option<ResponseTX>, pkt: tt::Packet) -> Result<(), Error> {
         self.rsp_event(tx, Event::Packet(pkt)).await
     }
@@ -298,7 +310,7 @@ impl Session {
         bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> Result<(), Error> {
-        self.check_state(State::Working, "handle_publish")?;
+        self.check_working_state("handle_publish")?;
 
         let pkt = tt::Publish::decode(self.get_protocol(), fixed_header, bytes)?;
         trace_input!(pkt);
@@ -334,7 +346,7 @@ impl Session {
         bytes: Bytes,
         _obuf: &mut BytesMut,
     ) -> Result<(), Error> {
-        self.check_state(State::Working, "handle_suback")?;
+        self.check_working_state("handle_suback")?;
 
         let pkt = tt::SubAck::decode(self.get_protocol(), fixed_header, bytes)?;
         trace_input!(pkt);
@@ -357,7 +369,7 @@ impl Session {
         bytes: Bytes,
         _obuf: &mut BytesMut,
     ) -> Result<(), Error> {
-        self.check_state(State::Working, "handle_unsuback")?;
+        self.check_working_state("handle_unsuback")?;
 
         let pkt = tt::UnsubAck::decode(self.get_protocol(), fixed_header, bytes)?;
         trace_input!(pkt);
@@ -380,7 +392,7 @@ impl Session {
         bytes: Bytes,
         _obuf: &mut BytesMut,
     ) -> Result<(), Error> {
-        self.check_state(State::Working, "handle_puback")?;
+        self.check_working_state("handle_puback")?;
 
         let pkt = tt::PubAck::decode(self.get_protocol(), fixed_header, bytes)?;
         trace_input!(pkt);
@@ -407,7 +419,7 @@ impl Session {
         bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> Result<(), Error> {
-        self.check_state(State::Working, "handle_pubrec")?;
+        self.check_working_state("handle_pubrec")?;
 
         let pkt = tt::PubRec::decode(self.get_protocol(), fixed_header, bytes)?;
         trace_input!(pkt);
@@ -453,7 +465,7 @@ impl Session {
         bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> Result<(), Error> {
-        self.check_state(State::Working, "handle_pubrec")?;
+        self.check_working_state("handle_pubrec")?;
 
         let pkt = tt::PubRel::decode(self.get_protocol(), fixed_header, bytes)?;
         trace_input!(pkt);
@@ -479,7 +491,7 @@ impl Session {
         bytes: Bytes,
         _obuf: &mut BytesMut,
     ) -> Result<(), Error> {
-        self.check_state(State::Working, "handle_pubcomp")?;
+        self.check_working_state("handle_pubcomp")?;
 
         let pkt = tt::PubComp::decode(self.get_protocol(), fixed_header, bytes)?;
         trace_input!(pkt);
@@ -501,7 +513,7 @@ impl Session {
         _bytes: Bytes,
         _obuf: &mut BytesMut,
     ) -> Result<(), Error> {
-        self.check_state(State::Working, "handle_pingresp")?;
+        self.check_working_state("handle_pingresp")?;
 
         trace_input!(tt::Packet::PingResp);
 
@@ -514,7 +526,7 @@ impl Session {
         bytes: Bytes,
         _obuf: &mut BytesMut,
     ) -> Result<(), Error> {
-        self.check_state(State::Working, "handle_disconnect")?;
+        self.check_working_state("handle_disconnect")?;
 
         let pkt = tt::Disconnect::decode(self.get_protocol(), fixed_header, bytes)?;
         trace_input!(pkt);
@@ -539,9 +551,9 @@ impl Session {
                     let bytes = ibuf.split_to(h.frame_length()).freeze();
                     let packet_type = tt::PacketType::try_from(h.get_type_byte())?;
 
-                    if packet_type != tt::PacketType::ConnAck {
-                        self.check_state(State::Working, "handle_incoming")?;
-                    }
+                    // if packet_type != tt::PacketType::ConnAck {
+                    //     self.check_state(State::Working, format!("handle_incoming type {:?}", packet_type))?;
+                    // }
 
                     match packet_type {
                         tt::PacketType::ConnAck => {
@@ -1060,5 +1072,188 @@ impl Sender {
                 }
             }
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct SyncClient {
+    protocol: tt::Protocol,
+    socket: Option<TcpStream>,
+    ibuf: BytesMut,
+    pktid: u16,
+}
+
+impl SyncClient {
+    pub fn new() -> Self {
+        Self {
+            protocol: tt::Protocol::V4,
+            socket: None,
+            ibuf: BytesMut::new(),
+            pktid: 0,
+        }
+    }
+
+    fn next_pktid(&mut self) -> u16 {
+        self.pktid += 1;
+        if self.pktid == 0 {
+            self.pktid = 1;
+        }
+        self.pktid
+    }
+
+    async fn recv_packet(&mut self) -> Result<(tt::PacketType, tt::FixedHeader, Bytes), Error> {
+        loop {
+            let r = tt::check(self.ibuf.iter(), 64 * 1024);
+            match r {
+                Err(tt::Error::InsufficientBytes(_required)) => {}
+                Err(e) => return Err(Error::Tt(e)),
+                Ok(h) => {
+                    let bytes = self.ibuf.split_to(h.frame_length()).freeze();
+                    let packet_type = tt::PacketType::try_from(h.get_type_byte())?;
+                    return Ok((packet_type, h, bytes));
+                }
+            }
+            self.socket
+                .as_mut()
+                .unwrap()
+                .read_buf(&mut self.ibuf)
+                .await?;
+        }
+    }
+
+    async fn recv_specific_packet(
+        &mut self,
+        expect_type: tt::PacketType,
+    ) -> Result<(tt::FixedHeader, Bytes), Error> {
+        let (ptype, h, bytes) = self.recv_packet().await?;
+        if ptype != expect_type {
+            return Err(Error::Generic(format!(
+                "expect packet {:?} but {:?}",
+                expect_type, ptype
+            )));
+        } else {
+            return Ok((h, bytes));
+        }
+    }
+
+    pub async fn connect(&mut self, addr: &str, pkt: &tt::Connect) -> Result<tt::ConnAck, Error> {
+        trace!("connecting to [{}]...", addr);
+
+        self.protocol = pkt.protocol;
+
+        let mut socket = TcpStream::connect(&addr).await?;
+
+        let mut obuf = BytesMut::new();
+        pkt.write(&mut obuf)?;
+        trace_output!(pkt);
+        socket.write_all_buf(&mut obuf).await?;
+        self.socket = Some(socket);
+
+        let (h, bytes) = self.recv_specific_packet(tt::PacketType::ConnAck).await?;
+        let ack = tt::ConnAck::decode(self.protocol, h, bytes)?;
+        trace_input!(ack);
+
+        Ok(ack)
+    }
+
+    pub async fn subscribe(&mut self, pkt: &tt::Subscribe) -> Result<tt::SubAck, Error> {
+        let pktid = self.next_pktid();
+        let socket = self.socket.as_mut().unwrap();
+        let mut obuf = BytesMut::new();
+        pkt.encode_with_pktid(self.protocol, pktid, &mut obuf)?;
+        trace_output!(pkt);
+        socket.write_all_buf(&mut obuf).await?;
+        let (h, bytes) = self.recv_specific_packet(tt::PacketType::SubAck).await?;
+        let ack = tt::SubAck::decode(self.protocol, h, bytes)?;
+        trace_input!(ack);
+        Ok(ack)
+    }
+
+    pub async fn unsubscribe(&mut self, pkt: &tt::Unsubscribe) -> Result<tt::UnsubAck, Error> {
+        let pktid = self.next_pktid();
+        let socket = self.socket.as_mut().unwrap();
+        let mut obuf = BytesMut::new();
+        pkt.encode_with_pktid(self.protocol, pktid, &mut obuf)?;
+        trace_output!(pkt);
+        socket.write_all_buf(&mut obuf).await?;
+        let (h, bytes) = self.recv_specific_packet(tt::PacketType::UnsubAck).await?;
+        let ack = tt::UnsubAck::decode(self.protocol, h, bytes)?;
+        trace_input!(ack);
+        Ok(ack)
+    }
+
+    pub async fn publish(&mut self, pkt: &tt::Publish) -> Result<(), Error> {
+        let pktid = self.next_pktid();
+        {
+            let socket = self.socket.as_mut().unwrap();
+            let mut obuf = BytesMut::new();
+            pkt.encode_with_pktid(self.protocol, pktid, &mut obuf)?;
+            trace_output!(pkt);
+            socket.write_all_buf(&mut obuf).await?;
+        }
+
+        match pkt.qos {
+            tt::QoS::AtMostOnce => {
+                return Ok(());
+            }
+            tt::QoS::AtLeastOnce => {
+                let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubAck).await?;
+                let ack = tt::PubAck::decode(self.protocol, h, bytes)?;
+                trace_input!(ack);
+                if ack.reason != tt::PubAckReason::Success {
+                    return Err(Error::Generic(format!("puback reason {:?}", ack.reason)));
+                } else {
+                    return Ok(());
+                }
+            }
+            tt::QoS::ExactlyOnce => {
+                let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubRec).await?;
+                let rec = tt::PubRec::decode(self.protocol, h, bytes)?;
+                trace_input!(rec);
+                if rec.reason != tt::PubRecReason::Success {
+                    return Err(Error::Generic(format!("pubrec reason {:?}", rec.reason)));
+                }
+
+                let socket = self.socket.as_mut().unwrap();
+                let mut obuf = BytesMut::new();
+
+                let rel = tt::PubRel::new(rec.pkid);
+                rel.encode(self.protocol, &mut &mut obuf)?;
+                trace_output!(rel);
+                socket.write_all_buf(&mut obuf).await?;
+
+                let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubComp).await?;
+                let comp = tt::PubComp::decode(self.protocol, h, bytes)?;
+                trace_input!(comp);
+                if comp.reason != tt::PubCompReason::Success {
+                    return Err(Error::Generic(format!("pubcomp reason {:?}", rec.reason)));
+                }
+
+                return Ok(());
+            }
+        }
+    }
+
+    pub async fn recv_publish(&mut self) -> Result<tt::Publish, Error> {
+        let (h, bytes) = self.recv_specific_packet(tt::PacketType::Publish).await?;
+        let pkt = tt::Publish::decode(self.protocol, h, bytes)?;
+        trace_input!(pkt);
+        Ok(pkt)
+    }
+
+    pub async fn disconnect(&mut self, pkt: &tt::Disconnect) -> Result<(), Error> {
+        let socket = self.socket.as_mut().unwrap();
+        let mut obuf = BytesMut::new();
+        pkt.encode(self.protocol, &mut obuf)?;
+        trace_output!(pkt);
+        socket.write_all_buf(&mut obuf).await?;
+        Ok(())
+    }
+
+    pub async fn shutdown(&mut self) -> Result<(), Error> {
+        let socket = self.socket.as_mut().unwrap();
+        socket.shutdown().await?;
+        self.socket = None;
+        Ok(())
     }
 }
