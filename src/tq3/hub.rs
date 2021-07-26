@@ -84,6 +84,10 @@ impl<T: Send> LatestFirstQue<T> {
         }
     }
 
+    pub fn max_qsize(&self) -> usize {
+        self.max_qsize
+    }
+
     pub fn close(&self) {
         {
             let mut data = self.data.lock().unwrap();
