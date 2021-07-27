@@ -3,19 +3,6 @@ use std::collections::HashMap;
 use crate::tq3::tt;
 use rand::{distributions::Alphanumeric, Rng};
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct Account {
-    pub user: Option<String>,
-    pub password: Option<String>,
-    pub client_id: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
-pub struct Environment {
-    pub address: String,
-    pub accounts: Vec<Account>,
-}
-
 use regex::Regex;
 use serde::{Deserialize, Deserializer};
 pub trait DeserializeWith: Sized {
@@ -35,6 +22,24 @@ impl DeserializeWith for tt::QoS {
             "QoS1" => Ok(tt::QoS::AtLeastOnce),
             "QoS2" => Ok(tt::QoS::ExactlyOnce),
             _ => Err(serde::de::Error::custom("error trying to deserialize QoS")),
+        }
+    }
+}
+
+impl DeserializeWith for tt::Protocol {
+    fn deserialize_with<'de, D>(de: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(de)?;
+        match s.as_ref() {
+            "4" => Ok(tt::Protocol::V4),
+            "V4" => Ok(tt::Protocol::V4),
+            "5" => Ok(tt::Protocol::V5),
+            "V5" => Ok(tt::Protocol::V5),
+            _ => Err(serde::de::Error::custom(
+                "error trying to deserialize Protocol",
+            )),
         }
     }
 }
@@ -86,6 +91,19 @@ impl config::Source for StringSource {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct Account {
+    pub user: Option<String>,
+    pub password: Option<String>,
+    pub client_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+pub struct Environment {
+    pub address: String,
+    pub accounts: Vec<Account>,
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct PubArgs {
     pub connections: u64,
@@ -102,6 +120,15 @@ pub struct PubArgs {
     pub padding_to_size: usize,
     pub content: String,
     pub packets: u64,
+
+    #[serde(
+        deserialize_with = "tt::Protocol::deserialize_with",
+        default = "tt::Protocol::default"
+    )]
+    pub protocol: tt::Protocol,
+
+    #[serde(default = "bool_true")]
+    pub clean_session: bool,
 }
 
 impl PubArgs {
@@ -124,14 +151,26 @@ impl PubArgs {
 pub struct SubArgs {
     pub connections: u64,
     pub conn_per_sec: u64,
+
     #[serde(default = "default_keep_alive_secs")]
     pub keep_alive_secs: u64,
+
     topic: String,
+
     #[serde(
         deserialize_with = "tt::QoS::deserialize_with",
         default = "tt::QoS::default"
     )]
     pub qos: tt::QoS,
+
+    #[serde(
+        deserialize_with = "tt::Protocol::deserialize_with",
+        default = "tt::Protocol::default"
+    )]
+    pub protocol: tt::Protocol,
+
+    #[serde(default = "bool_true")]
+    pub clean_session: bool,
 }
 
 impl SubArgs {

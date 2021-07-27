@@ -62,6 +62,8 @@
 
         content: "abcdefg",
         packets: 100
+        protocol: V4
+        clean_session: true
     }
     subs: {
         connections: 1
@@ -69,6 +71,8 @@
         keep_alive_secs: 30
         topic: t1/t2
         qos: QoS1
+        protocol: V4
+        clean_session: true
     }
 
     verification: {

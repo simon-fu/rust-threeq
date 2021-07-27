@@ -786,7 +786,13 @@ async fn task_entry(
             }
 
             r = rd.read_buf(&mut ibuf), if !hold_read=> {
-                let len = r?;
+                let len = match r {
+                    Ok(n) => n,
+                    Err(e) => {
+                        debug!("read socket fail, {:?}", e);
+                        return Err(Error::Io(e))
+                    },
+                };
                 if len == 0 {
                     if session.state == State::Disconnecting {
                         // gracefully disconnect

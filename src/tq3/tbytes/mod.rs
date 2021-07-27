@@ -62,10 +62,16 @@ pub enum PacketType {
 }
 
 /// Protocol type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Protocol {
     V4,
     V5,
+}
+
+impl Default for Protocol {
+    fn default() -> Self {
+        Protocol::V4
+    }
 }
 
 /// Quality of service
