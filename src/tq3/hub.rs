@@ -51,7 +51,6 @@ impl<T: Send, K: std::cmp::Eq + std::hash::Hash, SubT: Sub<T>> Hub<T, K, SubT> {
     }
 }
 
-
 // drop oldest item if queue is full
 
 #[derive(Debug)]

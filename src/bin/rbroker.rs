@@ -615,6 +615,7 @@ async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error
     let listener = TcpListener::bind(&cfg.tcp_listen_addr).await?;
     info!("mqtt tcp broker listening on {}", cfg.tcp_listen_addr);
 
+    SESSION_COUNTER.set(0);
     let hub = Arc::new(hub::Hub::default());
     let mut uid = 0;
 
@@ -630,9 +631,11 @@ async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error
                         let f = async move {
                             debug!("connected from {:?}", socket.peer_addr().unwrap());
                             let mut session = Session::new(hub0, uid);
+                            SESSION_COUNTER.inc();
                             if let Err(e) = session.run(socket).await {
                                 debug!("session finished error [{:?}]", e);
                             }
+                            SESSION_COUNTER.dec();
                             session.cleanup().await;
                         };
                         tokio::spawn(tracing::Instrument::instrument(f, span));
@@ -653,18 +656,45 @@ async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error
     }
 }
 
-// #[ntex::main]
-#[tokio::main]
-async fn main() {
+use actix_web::{get, App, HttpResponse, HttpServer, Responder};
+use prometheus::{Encoder, TextEncoder};
+
+// Register & measure some metrics.
+lazy_static::lazy_static! {
+    static ref SESSION_COUNTER: prometheus::IntGauge =
+        prometheus::register_int_gauge!("sessions", "Number of sessions").unwrap();
+}
+
+#[get("/metrics")]
+async fn metrics() -> impl Responder {
+    let mut buffer = Vec::new();
+    let encoder = TextEncoder::new();
+    let metric_families = prometheus::gather();
+    encoder.encode(&metric_families, &mut buffer).unwrap();
+    let output = String::from_utf8(buffer).unwrap();
+    // debug!("{}", output);
+    HttpResponse::Ok().body(output)
+}
+
+// #[tokio::main]
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
     tq3::log::tracing_subscriber::init();
 
     let cfg = Config::parse();
     info!("cfg={:?}", cfg);
 
-    match run_server(&cfg).await {
-        Ok(_) => {}
-        Err(e) => {
-            error!("{}", e);
+    tokio::spawn(async move {
+        match run_server(&cfg).await {
+            Ok(_) => {}
+            Err(e) => {
+                error!("{}", e);
+            }
         }
-    }
+    });
+
+    HttpServer::new(|| App::new().service(metrics))
+        .bind("127.0.0.1:8080")?
+        .run()
+        .await
 }
