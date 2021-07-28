@@ -323,14 +323,14 @@ async fn pub_task(
             let pkt = tt::Publish::new(&cfgw.pub_topic(), cfg.pubs.qos, []);
             pacer = pacer.with_time(t);
             let start_time = Instant::now();
-    
+
             while header.seq < cfg.pubs.packets {
                 trace!("send No.{} packet", header.seq);
-    
+
                 if let Some(d) = pacer.get_sleep_duration(header.seq) {
                     tokio::time::sleep(d).await;
                 }
-    
+
                 header.ts = TS::now_ms();
                 encode_msg(
                     &header,
@@ -338,14 +338,14 @@ async fn pub_task(
                     cfg.pubs.padding_to_size,
                     &mut buf,
                 );
-    
+
                 let mut pkt0 = pkt.clone();
                 pkt0.payload = buf.split().freeze();
-    
+
                 let _r = tx
                     .send(TaskEvent::SendPacket(Instant::now(), pkt0.payload.len()))
                     .await;
-    
+
                 let _r = sender.publish(pkt0).await?;
                 header.seq += 1;
             }
@@ -358,7 +358,6 @@ async fn pub_task(
                 }
             }
         }
-        
     }
     let t = Instant::now();
     let elapsed_ms = pacer.kick_time().elapsed().as_millis() as u64;
@@ -726,8 +725,6 @@ impl BenchLatency {
         let _r = req_tx.send(TaskReq::KickXfer(kick_time));
 
         if cfg.pubs.connections > 0 && cfg.pubs.packets > 0 {
- 
-
             debug!("waiting for pub result...");
             while self.pub_results < cfg.pubs.connections {
                 self.recv_event(&mut ev_rx).await?;
