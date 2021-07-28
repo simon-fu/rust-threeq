@@ -298,7 +298,7 @@ async fn pub_task(
     mut rx: ReqRecver,
 ) -> Result<(), Error> {
     let cfg = cfgw.raw();
-    let (mut sender, _recver) =
+    let (mut sender, mut recver) =
         tt::client::make_connection(&format!("pub{}", pubid), &cfgw.env().address)
             .await?
             .split();
@@ -318,37 +318,47 @@ async fn pub_task(
     let mut pacer = tq3::limit::Pacer::new(cfg.pubs.qps);
 
     if let TaskReq::KickXfer(t) = req {
-        let mut buf = BytesMut::new();
-        let pkt = tt::Publish::new(&cfgw.pub_topic(), cfg.pubs.qos, []);
-        pacer = pacer.with_time(t);
-        let start_time = Instant::now();
-
-        while header.seq < cfg.pubs.packets {
-            trace!("send No.{} packet", header.seq);
-
-            if let Some(d) = pacer.get_sleep_duration(header.seq) {
-                tokio::time::sleep(d).await;
+        if cfg.pubs.packets > 0 {
+            let mut buf = BytesMut::new();
+            let pkt = tt::Publish::new(&cfgw.pub_topic(), cfg.pubs.qos, []);
+            pacer = pacer.with_time(t);
+            let start_time = Instant::now();
+    
+            while header.seq < cfg.pubs.packets {
+                trace!("send No.{} packet", header.seq);
+    
+                if let Some(d) = pacer.get_sleep_duration(header.seq) {
+                    tokio::time::sleep(d).await;
+                }
+    
+                header.ts = TS::now_ms();
+                encode_msg(
+                    &header,
+                    cfg.pubs.content.as_bytes(),
+                    cfg.pubs.padding_to_size,
+                    &mut buf,
+                );
+    
+                let mut pkt0 = pkt.clone();
+                pkt0.payload = buf.split().freeze();
+    
+                let _r = tx
+                    .send(TaskEvent::SendPacket(Instant::now(), pkt0.payload.len()))
+                    .await;
+    
+                let _r = sender.publish(pkt0).await?;
+                header.seq += 1;
             }
-
-            header.ts = TS::now_ms();
-            encode_msg(
-                &header,
-                cfg.pubs.content.as_bytes(),
-                cfg.pubs.padding_to_size,
-                &mut buf,
-            );
-
-            let mut pkt0 = pkt.clone();
-            pkt0.payload = buf.split().freeze();
-
-            let _r = tx
-                .send(TaskEvent::SendPacket(Instant::now(), pkt0.payload.len()))
-                .await;
-
-            let _r = sender.publish(pkt0).await?;
-            header.seq += 1;
+            let _r = tx.send(TaskEvent::PubStart(start_time)).await;
+        } else {
+            loop {
+                let ev = recver.recv().await?;
+                if let tt::client::Event::Closed(_reason) = ev {
+                    break;
+                }
+            }
         }
-        let _r = tx.send(TaskEvent::PubStart(start_time)).await;
+        
     }
     let t = Instant::now();
     let elapsed_ms = pacer.kick_time().elapsed().as_millis() as u64;
@@ -711,10 +721,12 @@ impl BenchLatency {
         }
 
         let kick_time = Instant::now();
+        // kick publish
+        debug!("-> kick publish");
+        let _r = req_tx.send(TaskReq::KickXfer(kick_time));
+
         if cfg.pubs.connections > 0 && cfg.pubs.packets > 0 {
-            // kick publish
-            debug!("-> kick publish");
-            let _r = req_tx.send(TaskReq::KickXfer(kick_time));
+ 
 
             debug!("waiting for pub result...");
             while self.pub_results < cfg.pubs.connections {
@@ -743,7 +755,7 @@ impl BenchLatency {
             }
             debug!("<- recv all sub result");
         } else {
-            debug!("skip publish, waiting for connections down");
+            debug!("waiting for connections down");
 
             while self.pub_results < cfg.pubs.connections {
                 self.recv_event(&mut ev_rx).await?;
