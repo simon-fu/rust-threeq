@@ -51,6 +51,9 @@ impl<T: Send, K: std::cmp::Eq + std::hash::Hash, SubT: Sub<T>> Hub<T, K, SubT> {
     }
 }
 
+
+// drop oldest item if queue is full
+
 #[derive(Debug)]
 pub enum Error {
     Closed,
@@ -58,24 +61,24 @@ pub enum Error {
 }
 
 #[derive(Debug, Default)]
-struct LatestFirstData<T> {
+struct SlidingData<T> {
     que: VecDeque<T>,
     drops: usize,
     closed: bool,
 }
 
 #[derive(Debug, Default)]
-pub struct LatestFirstQue<T> {
+pub struct SlidingQue<T> {
     max_qsize: usize,
     notify: Notify,
-    data: Mutex<LatestFirstData<T>>,
+    data: Mutex<SlidingData<T>>,
 }
 
-impl<T: Send> LatestFirstQue<T> {
+impl<T: Send> SlidingQue<T> {
     pub fn new(max_qsize: usize) -> Self {
         Self {
             max_qsize,
-            data: Mutex::new(LatestFirstData {
+            data: Mutex::new(SlidingData {
                 que: VecDeque::new(),
                 drops: 0,
                 closed: false,
@@ -119,7 +122,7 @@ impl<T: Send> LatestFirstQue<T> {
 }
 
 // #[async_trait]
-impl<T: Send + Sync + Clone> Sub<T> for LatestFirstQue<T> {
+impl<T: Send + Sync + Clone> Sub<T> for SlidingQue<T> {
     fn push(&self, msg: &T) {
         {
             let mut data = self.data.lock().unwrap();

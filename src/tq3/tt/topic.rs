@@ -5,7 +5,7 @@ pub mod v1 {
     use crate::tq3::{self, hub};
     use std::sync::Arc;
 
-    pub type Subscriptions = tq3::hub::LatestFirstQue<Arc<Message>>;
+    pub type Subscriptions = tq3::hub::SlidingQue<Arc<Message>>;
     pub type Hub = hub::Hub<Arc<Message>, u64, Subscriptions>;
 
     // pub type Subscriptions = Subscriptions<Message>;

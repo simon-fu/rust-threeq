@@ -154,7 +154,7 @@ fn watch_clone_rx<T: Send + Clone>(
     WatchRecver { rx: rx.rx.clone() }
 }
 
-pub type WakeSubscriptions<T> = hub::LatestFirstQue<T>;
+pub type WakeSubscriptions<T> = hub::SlidingQue<T>;
 pub type WakeHub<T> = hub::Hub<T, u64, WakeSubscriptions<T>>;
 
 #[derive(Debug)]
