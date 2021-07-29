@@ -38,7 +38,7 @@ Events:
 use crate::tq3::tt;
 use bytes::{Bytes, BytesMut};
 use core::panic;
-use std::{collections::HashMap, convert::TryFrom, time::Duration};
+use std::{collections::HashMap, convert::TryFrom, num::Wrapping, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -182,7 +182,7 @@ struct Session {
     max_osize: usize,
     tx: mpsc::Sender<Response>,
     state: State,
-    pktid: u16,
+    pktid: Wrapping<u16>,
     max_incoming_size: usize,
     conn_pkt: Option<tt::Connect>,
     inflight: HashMap<u16, Request>,
@@ -196,7 +196,7 @@ impl Session {
             max_osize: 16 * 1024,
             tx,
             state: State::Ready,
-            pktid: 0,
+            pktid: Wrapping(0),
             max_incoming_size: 64 * 1024,
             conn_pkt: None,
             inflight: Default::default(),
@@ -206,11 +206,11 @@ impl Session {
     }
 
     fn next_pktid(&mut self) -> u16 {
-        self.pktid += 1;
-        if self.pktid == 0 {
-            self.pktid = 1;
+        self.pktid += Wrapping(1);
+        if self.pktid.0 == 0 {
+            self.pktid.0 = 1;
         }
-        self.pktid
+        self.pktid.0
     }
 
     fn get_protocol(&self) -> tt::Protocol {
@@ -610,7 +610,7 @@ impl Session {
     }
 
     async fn response_disconnect(&mut self, reason: &str) -> Result<(), Error> {
-        match self.inflight.remove(&self.pktid) {
+        match self.inflight.remove(&self.pktid.0) {
             Some(req) => self.rsp_event(req.tx, Event::Closed(reason.into())).await?,
             None => {}
         };
