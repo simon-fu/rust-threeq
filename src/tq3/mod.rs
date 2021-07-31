@@ -2,6 +2,12 @@ use std::time::Duration;
 
 use tracing::info;
 
+use core::future::Future;
+use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
+use tokio::sync::mpsc;
+
 pub mod tt;
 
 pub mod tbytes;
@@ -201,6 +207,39 @@ impl SnowflakeIdSafe {
     }
 }
 
+// refer from ReceiverStream::next()
+#[derive(Debug)]
+pub struct TryRecv<'a, T> {
+    rx: &'a mut mpsc::Receiver<T>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum TryRecvResult<T> {
+    Value(T),
+    Empty,
+    NoSender,
+}
+
+impl<'a, T> TryRecv<'a, T> {
+    pub fn new(rx: &'a mut mpsc::Receiver<T>) -> Self {
+        Self { rx }
+    }
+}
+
+impl<T> Future for TryRecv<'_, T> {
+    type Output = TryRecvResult<T>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.rx.poll_recv(cx) {
+            Poll::Ready(o) => match o {
+                Some(v) => Poll::Ready(TryRecvResult::Value(v)),
+                None => Poll::Ready(TryRecvResult::NoSender),
+            },
+            Poll::Pending => Poll::Ready(TryRecvResult::Empty),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,5 +380,17 @@ mod tests {
         }
 
         assert_eq!(max_seq, 4095);
+    }
+
+    #[tokio::test]
+    async fn test_try_next() {
+        // RUST_LOG=debug  cargo test test_try_next -- --nocapture
+        let (tx, mut rx) = mpsc::channel(100);
+        assert_eq!(TryRecv::new(&mut rx).await, TryRecvResult::Empty);
+        let _r = tx.send(1u64).await;
+        assert_eq!(TryRecv::new(&mut rx).await, TryRecvResult::Value(1));
+        assert_eq!(TryRecv::new(&mut rx).await, TryRecvResult::Empty);
+        drop(tx);
+        assert_eq!(TryRecv::new(&mut rx).await, TryRecvResult::NoSender);
     }
 }

@@ -7,8 +7,13 @@ use std::{
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use clap::Clap;
 use histogram::Histogram;
-use rust_threeq::tq3::{self, tt, TS};
-use tokio::sync::{mpsc, watch};
+use rust_threeq::tq3::{self, tt, TryRecv, TryRecvResult, TS};
+use tokio::task::JoinHandle;
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinError,
+    time::timeout,
+};
 use tracing::{debug, error, info, trace, warn};
 use tt::config::*;
 
@@ -22,14 +27,20 @@ struct CmdArgs {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("error: {0}")]
+    Generic(String),
+
     #[error("{0}")]
     ClientError(#[from] tt::client::Error),
 
     #[error("{0}")]
     WatchError(tokio::sync::watch::error::RecvError),
 
-    #[error("error: {0}")]
-    Generic(String),
+    #[error("{0}")]
+    ReqwestError(#[from] reqwest::Error),
+
+    #[error("{0}")]
+    JoinError(#[from] JoinError),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -218,7 +229,7 @@ async fn sub_task(
                 );
                 break;
             }
-            pubers.resize(header.pubid, Puber::default());
+            pubers.resize(header.pubid + 1, Puber::default());
         }
 
         let puber = &mut pubers[header.pubid];
@@ -473,6 +484,7 @@ impl TrafficSpeed {
 #[derive(Debug, Default)]
 struct Sessions {
     name: String,
+    num_tasks: u64,
     num_conns: u64,
     num_readys: u64,
     num_results: u64,
@@ -484,6 +496,7 @@ struct Sessions {
     work_range: InstantRange,
     result_range: InstantRange,
     speed: TrafficSpeed,
+    next_ready_ms: i64,
 }
 
 impl Sessions {
@@ -492,8 +505,14 @@ impl Sessions {
         self.num_conns = conns;
     }
 
-    async fn recv_event(&mut self, ev_rx: &mut EVRecver) -> Result<(), Error> {
-        let ev = ev_rx.recv().await.unwrap();
+    fn print_readys(&self) {
+        debug!(
+            "{}: spawned tasks {}, connections {}",
+            self.name, self.num_tasks, self.num_readys
+        );
+    }
+
+    async fn handle_event(&mut self, ev: TaskEvent) -> Result<(), Error> {
         match ev {
             TaskEvent::Error(e) => {
                 return Err(e);
@@ -501,6 +520,10 @@ impl Sessions {
             TaskEvent::Connected(_) => {}
             TaskEvent::Ready(_) => {
                 self.num_readys += 1;
+                if TS::mono_ms() >= self.next_ready_ms {
+                    self.print_readys();
+                    self.next_ready_ms = TS::mono_ms() + 1000;
+                }
             }
             TaskEvent::Work(t) => {
                 self.work_range.update(t);
@@ -517,69 +540,439 @@ impl Sessions {
                 self.num_results += 1;
                 self.stati.merge(&s);
                 let _r = self.qps_h.increment(s.qps);
-                if self.result_range.update(t) {
-                    debug!("{}: first result", self.name); // aaa
+                self.result_range.update(t);
+
+                if self.num_results == 1 {
+                    debug!("{}: recv first result", self.name);
+                }
+                if self.num_results >= self.num_conns {
+                    debug!("{}: recv all result", self.name);
                 }
             }
             TaskEvent::Finished(_n) => {
                 self.num_finisheds += 1;
             }
         }
+
         Ok(())
     }
 
-    async fn wait_for_ready(
-        &mut self,
-        ev_rx: &mut EVRecver,
-        interval: &mut tq3::limit::Interval,
-    ) -> Result<(), Error> {
-        if self.num_conns > 0 {
-            while self.num_readys < self.num_conns {
-                if interval.check() {
-                    debug!("{}: setup connections {}", self.name, self.num_readys);
+    async fn recv_event(&mut self, ev_rx: &mut EVRecver) -> Result<bool, Error> {
+        let o = ev_rx.recv().await;
+        if o.is_none() {
+            return Ok(false);
+        }
+
+        self.handle_event(o.unwrap()).await?;
+
+        Ok(true)
+    }
+
+    async fn try_recv_event(&mut self, ev_rx: &mut EVRecver) -> Result<bool, Error> {
+        let r = TryRecv::new(ev_rx).await;
+        match r {
+            TryRecvResult::Value(ev) => {
+                self.handle_event(ev).await?;
+                return Ok(true);
+            }
+            TryRecvResult::Empty => {}
+            TryRecvResult::NoSender => {}
+        }
+        Ok(false)
+    }
+
+    async fn wait_for_ready(&mut self, ev_rx: &mut EVRecver) -> Result<(), Error> {
+        if self.num_readys < self.num_tasks {
+            while self.num_readys < self.num_tasks {
+                self.recv_event(ev_rx).await?;
+            }
+            self.print_readys();
+            debug!("{}: all connections ready", self.name);
+        }
+        Ok(())
+    }
+
+    pub async fn launch(
+        mut self: Box<Self>,
+        mut ev_rx: EVRecver,
+    ) -> Result<JoinHandle<Result<Box<Self>, Error>>, Error> {
+        let h = tokio::spawn(async move {
+            loop {
+                if !self.recv_event(&mut ev_rx).await? {
+                    break;
                 }
-                self.recv_event(ev_rx).await?;
             }
-            info!("{}: setup connections {}", self.name, self.num_readys);
-        }
-        Ok(())
-    }
-
-    async fn wait_for_result(&mut self, ev_rx: &mut EVRecver) -> Result<(), Error> {
-        if self.num_conns > 0 {
-            while !self.is_recv_results() {
-                self.recv_event(ev_rx).await?;
-            }
-            debug!("{}: recv all result", self.name);
-        }
-        Ok(())
-    }
-
-    fn is_recv_results(&self) -> bool {
-        self.num_results >= self.num_conns
+            Ok::<Box<Self>, Error>(self)
+        });
+        Ok(h)
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
+struct RestSession {
+    cfg: Arc<tt::config::Config>,
+    tx: EVSender,
+    rx: ReqRecver,
+}
+
+impl RestSession {
+    pub fn new(cfg: Arc<tt::config::Config>, tx: EVSender, rx: ReqRecver) -> Self {
+        Self { cfg, tx, rx }
+    }
+
+    pub async fn call_rest(cfg: &RestApiArg, s: String) -> Result<(), reqwest::Error> {
+        let req_body = cfg.make_body(&mut cfg.body.clone(), s);
+
+        {
+            let client = reqwest::Client::new();
+
+            let mut builder = client.post(&cfg.url);
+            for (k, v) in &cfg.headers {
+                builder = builder.header(k, v);
+            }
+
+            trace!("request url ={:?}", cfg.url);
+            trace!("request body={:?}", req_body);
+
+            let res = builder.body(req_body).send().await?;
+            let rsp_status = res.status();
+            let rsp_body = res.text().await?;
+
+            trace!("response status: {}", rsp_status);
+            trace!("response body  : {}", rsp_body);
+        }
+        Ok(())
+    }
+
+    async fn task_entry(&mut self, pubid: u64) -> Result<(), Error> {
+        let _r = self.tx.send(TaskEvent::Ready(Instant::now())).await;
+        let req = wait_for_req(&mut self.rx).await?;
+
+        let mut header = Header::new(pubid as usize);
+        header.max_seq = self.cfg.raw().rest_pubs.packets;
+
+        let mut pacer = tq3::limit::Pacer::new(self.cfg.raw().rest_pubs.qps);
+
+        if let TaskReq::KickXfer(t) = req {
+            let mut buf = BytesMut::new();
+            pacer = pacer.with_time(t);
+            let start_time = Instant::now();
+
+            while header.seq < header.max_seq {
+                trace!("send No.{} packet", header.seq);
+
+                if let Some(d) = pacer.get_sleep_duration(header.seq) {
+                    tokio::time::sleep(d).await;
+                }
+
+                header.ts = TS::now_ms();
+                encode_msg(
+                    &header,
+                    &[],
+                    self.cfg.raw().rest_pubs.padding_to_size,
+                    &mut buf,
+                );
+
+                let payload = buf.split().freeze();
+                let payload = base64::encode(payload);
+                let _r = self
+                    .tx
+                    .send(TaskEvent::Packet(Instant::now(), payload.len(), 0))
+                    .await;
+
+                Self::call_rest(&self.cfg.env().rest_api, payload).await?;
+
+                header.seq += 1;
+            }
+            let _r = self.tx.send(TaskEvent::Work(start_time)).await;
+        }
+        let t = Instant::now();
+        let elapsed_ms = pacer.kick_time().elapsed().as_millis() as u64;
+        // debug!("elapsed_ms {}", elapsed_ms);
+
+        let mut stati = TaskStati::default();
+        if elapsed_ms > 1000 {
+            stati.qps = header.max_seq * 1000 / elapsed_ms;
+        } else {
+            stati.qps = header.seq;
+        }
+        let _r = self.tx.send(TaskEvent::Result(t, stati)).await;
+        let _r = self.tx.send(TaskEvent::Finished(pubid)).await;
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct RestSessions {
+    name: String,
+    sessions: Option<Box<Sessions>>,
+    merge_task: Option<JoinHandle<Result<Box<Sessions>, Error>>>,
+}
+
+impl RestSessions {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            sessions: None,
+            merge_task: None,
+        }
+    }
+
+    pub async fn launch(
+        &mut self,
+        cfgw: Arc<tt::config::Config>,
+        req_rx: &ReqRecver,
+        pubid: &mut u64,
+    ) -> Result<(), Error> {
+        let cfg = &cfgw.raw().rest_pubs;
+        if cfg.packets == 0 {
+            return Ok(());
+        }
+
+        let connections = 1u64;
+        let mut ss = Box::new(Sessions::default());
+        ss.customize(&self.name, connections);
+
+        let (ev_tx, mut ev_rx) = mpsc::channel(10240);
+        let pacer = tq3::limit::Pacer::new(connections);
+        while ss.num_tasks < connections {
+            if let Some(d) = pacer.get_sleep_duration(ss.num_tasks) {
+                if ss.num_readys < ss.num_tasks {
+                    ss.try_recv_event(&mut ev_rx).await?;
+                    continue;
+                }
+                tokio::time::sleep(d).await;
+            }
+
+            // let acc = accounts.next().unwrap();
+            let cfg0 = cfgw.clone();
+            let tx0 = ev_tx.clone();
+            let rx0 = req_rx.clone();
+            let n = *pubid;
+            let mut session = RestSession::new(cfg0, tx0, rx0);
+            let f = async move {
+                let r = session.task_entry(n).await;
+                if let Err(e) = r {
+                    debug!("rest: task finished error [{:?}]", e);
+                    let _r = session.tx.send(TaskEvent::Error(e)).await;
+                }
+            };
+            let span = tracing::span!(tracing::Level::INFO, "", s = n);
+            tokio::spawn(tracing::Instrument::instrument(f, span));
+            *pubid += 1;
+            ss.num_tasks += 1;
+        }
+
+        ss.wait_for_ready(&mut ev_rx).await?;
+
+        self.merge_task = Some(ss.launch(ev_rx).await?);
+
+        Ok(())
+    }
+
+    pub async fn wait_for_finished(&mut self) -> Result<(), Error> {
+        if self.merge_task.is_some() {
+            let ss = self.merge_task.take().unwrap().await??;
+            self.sessions = Some(ss);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct SubSessions {
+    name: String,
+    sessions: Option<Box<Sessions>>,
+    merge_task: Option<JoinHandle<Result<Box<Sessions>, Error>>>,
+}
+
+impl SubSessions {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            sessions: None,
+            merge_task: None,
+        }
+    }
+
+    pub async fn launch(
+        &mut self,
+        cfgw: Arc<tt::config::Config>,
+        req_rx: &ReqRecver,
+        accounts: &mut AccountIter<'_>,
+    ) -> Result<(), Error> {
+        let cfg = &cfgw.raw().subs;
+        if cfg.connections == 0 {
+            return Ok(());
+        }
+
+        let mut ss = Box::new(Sessions::default());
+        ss.customize(&self.name, cfg.connections);
+
+        let (ev_tx, mut ev_rx) = mpsc::channel(10240);
+        let pacer = tq3::limit::Pacer::new(cfg.conn_per_sec);
+        while ss.num_tasks < cfg.connections {
+            if let Some(d) = pacer.get_sleep_duration(ss.num_tasks) {
+                if ss.num_readys < ss.num_tasks {
+                    ss.try_recv_event(&mut ev_rx).await?;
+                    continue;
+                }
+                tokio::time::sleep(d).await;
+            }
+
+            let acc = accounts.next().unwrap();
+            let cfg0 = cfgw.clone();
+            let tx0 = ev_tx.clone();
+            let rx0 = req_rx.clone();
+            let n = ss.num_tasks;
+            let f = async move {
+                let r = sub_task(n, cfg0, acc, &tx0, rx0).await;
+                if let Err(e) = r {
+                    debug!("sub task finished error [{:?}]", e);
+                    let _r = tx0.send(TaskEvent::Error(e)).await;
+                }
+            };
+            let span = tracing::span!(tracing::Level::INFO, "", s = n);
+            tokio::spawn(tracing::Instrument::instrument(f, span));
+            ss.num_tasks += 1;
+        }
+
+        ss.wait_for_ready(&mut ev_rx).await?;
+
+        self.merge_task = Some(ss.launch(ev_rx).await?);
+
+        Ok(())
+    }
+
+    pub async fn wait_for_finished(&mut self) -> Result<(), Error> {
+        if self.merge_task.is_some() {
+            let ss = self.merge_task.take().unwrap().await??;
+            self.sessions = Some(ss);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct PubSessions {
+    name: String,
+    sessions: Option<Box<Sessions>>,
+    merge_task: Option<JoinHandle<Result<Box<Sessions>, Error>>>,
+}
+
+impl PubSessions {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            sessions: None,
+            merge_task: None,
+        }
+    }
+
+    pub async fn launch(
+        &mut self,
+        cfgw: Arc<tt::config::Config>,
+        req_rx: &ReqRecver,
+        accounts: &mut AccountIter<'_>,
+        pubid: &mut u64,
+    ) -> Result<(), Error> {
+        let cfg = &cfgw.raw().pubs;
+        if cfg.connections == 0 {
+            return Ok(());
+        }
+
+        let mut ss = Box::new(Sessions::default());
+        ss.customize(&self.name, cfg.connections);
+
+        let (ev_tx, mut ev_rx) = mpsc::channel(10240);
+        let pacer = tq3::limit::Pacer::new(cfg.conn_per_sec);
+        while ss.num_tasks < cfg.connections {
+            if let Some(d) = pacer.get_sleep_duration(ss.num_tasks) {
+                if ss.num_readys < ss.num_tasks {
+                    ss.try_recv_event(&mut ev_rx).await?;
+                    continue;
+                }
+                tokio::time::sleep(d).await;
+            }
+
+            let acc = accounts.next().unwrap();
+            let cfg0 = cfgw.clone();
+            let tx0 = ev_tx.clone();
+            let rx0 = req_rx.clone();
+            let n = *pubid;
+            let f = async move {
+                let r = pub_task(n, cfg0, acc, &tx0, rx0).await;
+                if let Err(e) = r {
+                    debug!("pub task finished error [{:?}]", e);
+                    let _r = tx0.send(TaskEvent::Error(e)).await;
+                }
+            };
+
+            let span = tracing::span!(tracing::Level::INFO, "", s = n);
+            tokio::spawn(tracing::Instrument::instrument(f, span));
+            *pubid += 1;
+            ss.num_tasks += 1;
+        }
+
+        ss.wait_for_ready(&mut ev_rx).await?;
+
+        self.merge_task = Some(ss.launch(ev_rx).await?);
+
+        Ok(())
+    }
+
+    pub async fn wait_for_finished(&mut self) -> Result<(), Error> {
+        if self.merge_task.is_some() {
+            let ss = self.merge_task.take().unwrap().await??;
+            self.sessions = Some(ss);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
 struct BenchLatency {
-    pub_sessions: Sessions,
-    sub_sessions: Sessions,
+    pub_sessions: PubSessions,
+    sub_sessions: SubSessions,
+    rest_sessions: RestSessions,
 }
 
 impl BenchLatency {
-    fn print(&self, cfg: &Arc<tt::config::Config>) {
-        let sessions = &self.pub_sessions;
+    fn new() -> Self {
+        Self {
+            pub_sessions: PubSessions::new("pubs".to_string()),
+            sub_sessions: SubSessions::new("subs".to_string()),
+            rest_sessions: RestSessions::new("rest".to_string()),
+        }
+    }
+    fn print(&self, cfg: &Arc<tt::config::Config>, kick_time: &Instant) {
+        let pub_sessions = self.pub_sessions.sessions.as_ref().unwrap();
+        let sub_sessions = self.sub_sessions.sessions.as_ref().unwrap();
+
+        info!(
+            "Pub start time  : {:?}",
+            pub_sessions.work_range.delta_time_range(&kick_time)
+        );
+        info!(
+            "Pub result time: {:?}",
+            pub_sessions.result_range.delta_time_range(&kick_time)
+        );
+        info!(
+            "Sub result time: {:?}",
+            sub_sessions.result_range.delta_time_range(&kick_time)
+        );
+
         info!("");
         info!("Pub connections: {}", cfg.raw().pubs.connections);
         info!("Pub packets: {} packets/connection", cfg.raw().pubs.packets);
-        tq3::histogram::print_summary("Pub QPS", "qps/connection", &sessions.qps_h);
+        tq3::histogram::print_summary("Pub QPS", "qps/connection", &pub_sessions.qps_h);
 
-        let sessions = &self.sub_sessions;
         info!("");
         info!("Sub connections: {}", cfg.raw().subs.connections);
-        info!("Sub recv packets: {}", sessions.stati.packets);
-        info!("Sub lost packets: {}", sessions.stati.lost);
-        tq3::histogram::print_duration("Sub Latency", &sessions.latencyh);
+        info!("Sub recv packets: {}", sub_sessions.stati.packets);
+        info!("Sub lost packets: {}", sub_sessions.stati.lost);
+        tq3::histogram::print_duration("Sub Latency", &sub_sessions.latencyh);
     }
 
     pub async fn bench_priv(
@@ -594,93 +987,21 @@ impl BenchLatency {
         info!("address: [{}]", cfgw.env().address);
         info!("");
 
-        self.pub_sessions.customize("pub", cfg.pubs.connections);
-        self.sub_sessions.customize("sub", cfg.subs.connections);
-
         let mut accounts = AccountIter::new(&cfgw.env().accounts);
-        let (pub_tx, mut pub_rx) = mpsc::channel(10240);
-        let (sub_tx, mut sub_rx) = mpsc::channel(10240);
+        let mut pubid = 0u64;
 
-        if cfg.subs.connections > 0 {
-            let pacer = tq3::limit::Pacer::new(cfg.subs.conn_per_sec);
-            let mut interval = tq3::limit::Interval::new(1000);
-            let mut n = 0;
-            while n < cfg.subs.connections {
-                if let Some(d) = pacer.get_sleep_duration(n) {
-                    tokio::time::sleep(d).await;
-                }
+        self.sub_sessions
+            .launch(cfgw.clone(), req_rx, &mut accounts)
+            .await?;
+        self.pub_sessions
+            .launch(cfgw.clone(), req_rx, &mut accounts, &mut pubid)
+            .await?;
+        self.rest_sessions
+            .launch(cfgw.clone(), req_rx, &mut pubid)
+            .await?;
 
-                // pacer.check_and_wait(n).await;
-                if interval.check() {
-                    debug!(
-                        "spawned sub tasks {}, connections {}",
-                        n, self.sub_sessions.num_readys
-                    );
-                }
-
-                let acc = accounts.next().unwrap();
-                let cfg0 = cfgw.clone();
-                let tx0 = sub_tx.clone();
-                let rx0 = req_rx.clone();
-                let f = async move {
-                    let r = sub_task(n, cfg0, acc, &tx0, rx0).await;
-                    if let Err(e) = r {
-                        debug!("sub task finished error [{:?}]", e);
-                        let _r = tx0.send(TaskEvent::Error(e)).await;
-                    }
-                };
-                let span = tracing::span!(tracing::Level::INFO, "", s = n);
-                tokio::spawn(tracing::Instrument::instrument(f, span));
-                n += 1;
-            }
-
-            debug!("spawned sub tasks {}", cfg.subs.connections);
-            self.sub_sessions
-                .wait_for_ready(&mut sub_rx, &mut interval)
-                .await?;
-        }
-
-        if cfg.pubs.connections > 0 {
-            debug!("pub: try spawn tasks {}", cfg.pubs.connections);
-            let pacer = tq3::limit::Pacer::new(cfg.pubs.conn_per_sec);
-            let mut interval = tq3::limit::Interval::new(1000);
-            let mut n = 0;
-
-            while n < cfg.pubs.connections {
-                if let Some(d) = pacer.get_sleep_duration(n) {
-                    tokio::time::sleep(d).await;
-                }
-
-                if interval.check() {
-                    debug!(
-                        "pub: spawned tasks {}, connections {}",
-                        n, self.pub_sessions.num_readys
-                    );
-                }
-
-                let acc = accounts.next().unwrap();
-                let cfg0 = cfgw.clone();
-                let tx0 = pub_tx.clone();
-                let rx0 = req_rx.clone();
-                let f = async move {
-                    let r = pub_task(n, cfg0, acc, &tx0, rx0).await;
-                    if let Err(e) = r {
-                        debug!("pub: task finished error [{:?}]", e);
-                        let _r = tx0.send(TaskEvent::Error(e)).await;
-                    }
-                };
-                let span = tracing::span!(tracing::Level::INFO, "", p = n);
-                tokio::spawn(tracing::Instrument::instrument(f, span));
-                n += 1;
-            }
-
-            debug!("pub: spawned tasks {}", cfg.pubs.connections);
-            self.pub_sessions
-                .wait_for_ready(&mut pub_rx, &mut interval)
-                .await?;
-        }
-
-        let is_pub_packets = cfg.pubs.connections > 0 && cfg.pubs.packets > 0;
+        let is_pub_packets =
+            (cfg.pubs.connections > 0 && cfg.pubs.packets > 0) || cfg.rest_pubs.packets > 0;
         if is_pub_packets {
             debug!("-> kick start");
         } else {
@@ -689,44 +1010,23 @@ impl BenchLatency {
         let kick_time = Instant::now();
         let _r = req_tx.send(TaskReq::KickXfer(kick_time));
 
-        {
-            let pub_fut = self.pub_sessions.wait_for_result(&mut pub_rx);
-            let sub_fut = self.sub_sessions.wait_for_result(&mut sub_rx);
+        self.rest_sessions.wait_for_finished().await?;
 
-            tokio::pin!(pub_fut);
-            tokio::pin!(sub_fut);
+        self.pub_sessions.wait_for_finished().await?;
 
-            let mut dead_line =
-                tokio::time::Instant::now() + Duration::from_millis(cfg.recv_timeout_ms);
-            let for_ever = tokio::time::Instant::now() + Duration::from_secs(9999999);
+        let r = timeout(Duration::from_millis(1000), async {
+            self.sub_sessions.wait_for_finished().await
+        })
+        .await;
 
-            let mut pub_done = false;
-            let mut sub_done = false;
-
-            while !pub_done || !sub_done {
-                tokio::select! {
-                    r = &mut pub_fut, if !pub_done => {
-                        let _r = r?;
-                        pub_done = true;
-                        if is_pub_packets {
-                            dead_line = tokio::time::Instant::now() + Duration::from_millis(cfg.recv_timeout_ms);
-                        } else {
-                            dead_line = for_ever;
-                        }
-                    }
-
-                    r = &mut sub_fut, if !sub_done => {
-                        let _r = r?;
-                        sub_done = true;
-                    }
-
-                    _ = tokio::time::sleep_until(dead_line), if pub_done && !sub_done => {
-                        // force stop
-                        warn!("waiting for sub result timeout, send stop");
-                        let _r = req_tx.send(TaskReq::Stop);
-                        dead_line = for_ever;
-                    }
-                }
+        match r {
+            Ok(r0) => {
+                r0?;
+            }
+            Err(_) => {
+                warn!("waiting for sub result timeout, send stop");
+                let _r = req_tx.send(TaskReq::Stop);
+                self.sub_sessions.wait_for_finished().await?;
             }
         }
 
@@ -735,21 +1035,9 @@ impl BenchLatency {
         let elapsed = kick_time.elapsed();
 
         info!("");
-        info!(
-            "Pub start time  : {:?}",
-            self.pub_sessions.work_range.delta_time_range(&kick_time)
-        );
-        info!(
-            "Pub result time: {:?}",
-            self.pub_sessions.result_range.delta_time_range(&kick_time)
-        );
-        info!(
-            "Sub result time: {:?}",
-            self.sub_sessions.result_range.delta_time_range(&kick_time)
-        );
         debug!("Elapsed: {:?}", elapsed);
 
-        self.print(&cfgw);
+        self.print(&cfgw, &kick_time);
 
         Ok(())
     }
@@ -762,6 +1050,10 @@ impl BenchLatency {
     }
 }
 
+// async fn test() -> Result<(), reqwest::Error>{
+//     std::process::exit(0);
+// }
+
 #[tokio::main]
 async fn main() {
     tq3::log::tracing_subscriber::init();
@@ -770,13 +1062,25 @@ async fn main() {
     let cfg = tt::config::Config::load_from_file(&args.config);
     trace!("cfg=[{:#?}]", cfg.raw());
 
-    // use std::num::Wrapping;
-    // info!("0 - 1: {}", (Wrapping(0u16) - Wrapping(1u16)).0 );
-    // info!("65535 + 1: {}", (Wrapping(65535u16) + Wrapping(1)).0 );
+    // {
+
+    //     info!("module_path {}", module_path!());
+    //     let api = &cfg.env().rest_api;
+    //     let mut body = api.body.clone();
+
+    //     // info!("req body1={:?}", api.make_body(&mut body, base64::encode(b"111111") ) );
+    //     // info!("req body2={:?}", api.make_body(&mut body, base64::encode(b"222222") ) );
+
+    //     // let _r = RestSession::call_rest(api, base64::encode(b"123") ).await;
+
+    //     if !cfg.raw().env.is_empty() {
+    //         std::process::exit(0);
+    //     }
+    // }
 
     {
         let cfg = Arc::new(cfg);
-        let mut bencher = BenchLatency::default();
+        let mut bencher = BenchLatency::new();
 
         match bencher.bench(cfg).await {
             Ok(_) => {

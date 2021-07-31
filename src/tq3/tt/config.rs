@@ -102,6 +102,8 @@ pub struct Account {
 pub struct Environment {
     pub address: String,
     pub accounts: Vec<Account>,
+    #[serde(default = "RestApiArg::default")]
+    pub rest_api: RestApiArg,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -218,6 +220,68 @@ impl VerificationArgs {
     }
 }
 
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+pub struct RestApiArg {
+    pub url: String,
+    pub headers: HashMap<String, String>,
+    pub body: serde_json::Value,
+    pub payload_in_body: Vec<String>,
+}
+
+impl RestApiArg {
+    // pub fn new() -> RestApiArg {
+    //     hjson_default_value(r#"{
+    //         "url": ""
+    //         "headers": { }
+    //         "body": { }
+    //         payload_in_body:[""]
+    //     }"#)
+    // }
+
+    pub fn get_body_in<'a>(
+        fields: &Vec<String>,
+        root: &'a mut serde_json::Value,
+    ) -> Option<&'a mut serde_json::Value> {
+        if fields.is_empty() {
+            return Some(root);
+        } else {
+            {
+                let mut body = root.as_object_mut().unwrap();
+                for n in 0..fields.len() {
+                    let k = &fields[n];
+                    if n == fields.len() - 1 {
+                        return Some(&mut body[k]);
+                    } else {
+                        body = body[k].as_object_mut().unwrap();
+                    }
+                }
+            }
+            panic!("never reach here");
+        }
+    }
+
+    pub fn get_body_mut<'a>(&self, root: &'a mut serde_json::Value) -> &'a mut String {
+        let v = Self::get_body_in(&self.payload_in_body, root).unwrap();
+        if let serde_json::Value::String(s) = v {
+            return s;
+        }
+        panic!("never reach here");
+    }
+
+    pub fn make_body(&self, root: &mut serde_json::Value, str: String) -> String {
+        let s = self.get_body_mut(root);
+        *s = str;
+        serde_json::to_string(root).unwrap()
+    }
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct RestPubsArg {
+    pub packets: u64,
+    pub qps: u64,
+    pub padding_to_size: usize,
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Config0 {
     pub envs: HashMap<String, Environment>,
@@ -232,6 +296,9 @@ pub struct Config0 {
 
     #[serde(default = "VerificationArgs::new")]
     pub verification: VerificationArgs,
+
+    #[serde(default = "RestPubsArg::default")]
+    pub rest_pubs: RestPubsArg,
 }
 
 #[derive(Debug, Default)]
