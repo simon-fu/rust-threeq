@@ -40,6 +40,21 @@
                 }
             ]
         }
+
+        rest_api: {
+            url: http://api.sandbox.mqtt.chat/app/1NQ1E9/v1/rm/chat/publish
+            headers: {
+                Authorization: abc
+                content-type: application/json
+            }
+            body: {
+                clientid: "rest001@1NQ1E9",
+                payload: "",
+                topics: ["t1/t2"],
+                encoding: base64
+            }
+            payload_in_body:["payload"]
+        }
     }
     env: local
 
@@ -84,5 +99,11 @@
         verify_retain: true
         verify_will: true
         verify_shared: false
+    }
+
+    rest_pubs: {
+        qps: 10
+        padding_to_size: 256
+        packets: 1000000
     }
 }
