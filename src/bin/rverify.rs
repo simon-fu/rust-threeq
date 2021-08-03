@@ -393,11 +393,8 @@ impl<'a> SyncConnector<'a> {
     async fn publish_str(&mut self, s: &str) -> Result<(), Error> {
         let client = self.client.as_mut().unwrap();
         let _r = client
-            .publish(&tt::Publish::new(
-                &self.args.topic,
-                self.args.qos,
-                s,
-            )).await?;
+            .publish(&tt::Publish::new(&self.args.topic, self.args.qos, s))
+            .await?;
         Ok(())
     }
 
@@ -910,7 +907,6 @@ async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     let user3 = accounts.next().unwrap();
     let nmsgs = 10 as usize;
 
-    
     let mut client1 = SyncConnector::new(args, &user1);
     client1.connect("client1").await?;
     client1.subscribe1(&shared_filter, args.qos).await?;

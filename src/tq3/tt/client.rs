@@ -45,7 +45,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     time::{error::Elapsed, Instant},
 };
-use tracing::{Instrument, debug, error, trace};
+use tracing::{debug, error, trace, Instrument};
 
 macro_rules! trace_input {
     ($a:expr) => {{
@@ -1150,20 +1150,22 @@ impl SyncClient {
             trace!("connecting to [{}]...", addr);
 
             self.protocol = pkt.protocol;
-    
+
             let mut socket = TcpStream::connect(&addr).await?;
-    
+
             let mut obuf = BytesMut::new();
             pkt.write(&mut obuf)?;
             trace_output!(pkt);
             socket.write_all_buf(&mut obuf).await?;
             self.socket = Some(socket);
-    
+
             let (h, bytes) = self.recv_specific_packet(tt::PacketType::ConnAck).await?;
             let ack = tt::ConnAck::decode(self.protocol, h, bytes)?;
             trace_input!(ack);
             Ok(ack)
-        }.instrument(span) .await
+        }
+        .instrument(span)
+        .await
     }
 
     pub async fn subscribe(&mut self, pkt: &tt::Subscribe) -> Result<tt::SubAck, Error> {
@@ -1179,7 +1181,9 @@ impl SyncClient {
             let ack = tt::SubAck::decode(self.protocol, h, bytes)?;
             trace_input!(ack);
             Ok(ack)
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 
     pub async fn unsubscribe(&mut self, pkt: &tt::Unsubscribe) -> Result<tt::UnsubAck, Error> {
@@ -1195,7 +1199,9 @@ impl SyncClient {
             let ack = tt::UnsubAck::decode(self.protocol, h, bytes)?;
             trace_input!(ack);
             Ok(ack)
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 
     pub async fn publish(&mut self, pkt: &tt::Publish) -> Result<(), Error> {
@@ -1205,11 +1211,11 @@ impl SyncClient {
             {
                 let socket = self.socket.as_mut().unwrap();
                 let mut obuf = BytesMut::new();
-                pkt.encode_with(self.protocol, pktid, pkt.qos,&mut obuf)?;
+                pkt.encode_with(self.protocol, pktid, pkt.qos, &mut obuf)?;
                 trace_output!(pkt);
                 socket.write_all_buf(&mut obuf).await?;
             }
-    
+
             match pkt.qos {
                 tt::QoS::AtMostOnce => {
                     return Ok(());
@@ -1231,26 +1237,28 @@ impl SyncClient {
                     if rec.reason != tt::PubRecReason::Success {
                         return Err(Error::Generic(format!("pubrec reason {:?}", rec.reason)));
                     }
-    
+
                     let socket = self.socket.as_mut().unwrap();
                     let mut obuf = BytesMut::new();
-    
+
                     let rel = tt::PubRel::new(rec.pkid);
                     rel.encode(self.protocol, &mut &mut obuf)?;
                     trace_output!(rel);
                     socket.write_all_buf(&mut obuf).await?;
-    
+
                     let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubComp).await?;
                     let comp = tt::PubComp::decode(self.protocol, h, bytes)?;
                     trace_input!(comp);
                     if comp.reason != tt::PubCompReason::Success {
                         return Err(Error::Generic(format!("pubcomp reason {:?}", rec.reason)));
                     }
-    
+
                     return Ok(());
                 }
             }
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 
     pub async fn recv_publish(&mut self) -> Result<tt::Publish, Error> {
@@ -1260,7 +1268,7 @@ impl SyncClient {
             let pkt = tt::Publish::decode(self.protocol, h, bytes)?;
             trace_input!(pkt);
             match pkt.qos {
-                tt::QoS::AtMostOnce => {},
+                tt::QoS::AtMostOnce => {}
                 tt::QoS::AtLeastOnce => {
                     let socket = self.socket.as_mut().unwrap();
                     let ack = tt::PubAck::new(pkt.pkid);
@@ -1268,7 +1276,7 @@ impl SyncClient {
                     ack.encode(self.protocol, &mut obuf)?;
                     trace_output!(ack);
                     socket.write_all_buf(&mut obuf).await?;
-                },
+                }
                 tt::QoS::ExactlyOnce => {
                     let mut obuf = BytesMut::new();
                     {
@@ -1276,13 +1284,16 @@ impl SyncClient {
                         rec.encode(self.protocol, &mut obuf)?;
                         trace_output!(rec);
                     }
- 
+
                     {
                         let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubRel).await?;
                         let rel = tt::PubRel::decode(self.protocol, h, bytes)?;
                         if rel.pkid != pkt.pkid {
-                            return Err(Error::Generic(format!("diff pkid {}, {}", rel.pkid, pkt.pkid)));
-                        }   
+                            return Err(Error::Generic(format!(
+                                "diff pkid {}, {}",
+                                rel.pkid, pkt.pkid
+                            )));
+                        }
                     }
 
                     {
@@ -1292,10 +1303,12 @@ impl SyncClient {
                     }
                     let socket = self.socket.as_mut().unwrap();
                     socket.write_all_buf(&mut obuf).await?;
-                },
+                }
             }
             Ok(pkt)
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 
     pub async fn disconnect(&mut self, pkt: &tt::Disconnect) -> Result<(), Error> {
@@ -1307,7 +1320,9 @@ impl SyncClient {
             trace_output!(pkt);
             socket.write_all_buf(&mut obuf).await?;
             Ok(())
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 
     pub async fn shutdown(&mut self) -> Result<(), Error> {
@@ -1317,6 +1332,8 @@ impl SyncClient {
             socket.shutdown().await?;
             self.socket = None;
             Ok(())
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 }
