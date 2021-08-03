@@ -190,6 +190,9 @@ impl SubArgs {
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct VerificationArgs {
     #[serde(default = "bool_true")]
+    pub clean_up: bool,
+
+    #[serde(default = "bool_true")]
     pub verify_v4: bool,
 
     #[serde(default = "bool_true")]

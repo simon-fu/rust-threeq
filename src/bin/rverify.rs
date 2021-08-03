@@ -150,19 +150,19 @@ impl<'a> Connector<'a> {
         return Ok(());
     }
 
-    async fn subscribe1(&mut self, filter: &str, qos: tt::QoS) -> Result<(), Error> {
-        let client = self.client.as_mut().unwrap();
-        let ack = client
-            .sender
-            .subscribe(tt::Subscribe::new(filter, qos))
-            .await?;
-        for reason in &ack.return_codes {
-            if !reason.is_success() {
-                return Err(Error::Generic(format!("{:?}", ack)));
-            }
-        }
-        return Ok(());
-    }
+    // async fn subscribe1(&mut self, filter: &str, qos: tt::QoS) -> Result<(), Error> {
+    //     let client = self.client.as_mut().unwrap();
+    //     let ack = client
+    //         .sender
+    //         .subscribe(tt::Subscribe::new(filter, qos))
+    //         .await?;
+    //     for reason in &ack.return_codes {
+    //         if !reason.is_success() {
+    //             return Err(Error::Generic(format!("{:?}", ack)));
+    //         }
+    //     }
+    //     return Ok(());
+    // }
 
     async fn unsubscribe(&mut self) -> Result<(), Error> {
         let client = self.client.as_mut().unwrap();
@@ -329,9 +329,8 @@ impl<'a> SyncConnector<'a> {
     //     self
     // }
 
-    async fn connect(&mut self, _name: &str) -> Result<(), Error> {
-        // let name = format!("{:p}", &self);
-        let mut client = tt::client::SyncClient::new();
+    async fn connect(&mut self, name: &str) -> Result<(), Error> {
+        let mut client = tt::client::SyncClient::new(name.to_string());
         let ack = client.connect(&self.args.addr, &self.pkt).await?;
         if ack.code != tt::ConnectReturnCode::Success {
             return Err(Error::Generic(format!("{:?}", ack)));
@@ -378,6 +377,40 @@ impl<'a> SyncConnector<'a> {
     //         }
     //     }
     //     return Ok(());
+    // }
+
+    // async fn publish<P: Into<Vec<u8>>>(&mut self, paylaod: P) -> Result<(), Error> {
+    //     let client = self.client.as_mut().unwrap();
+    //     let _r = client
+    //         .publish(&tt::Publish::new(
+    //             &self.args.topic,
+    //             self.args.qos,
+    //             paylaod,
+    //         )).await?;
+    //     Ok(())
+    // }
+
+    async fn publish_str(&mut self, s: &str) -> Result<(), Error> {
+        let client = self.client.as_mut().unwrap();
+        let _r = client
+            .publish(&tt::Publish::new(
+                &self.args.topic,
+                self.args.qos,
+                s,
+            )).await?;
+        Ok(())
+    }
+
+    async fn recv_publish(&mut self) -> Result<tt::Publish, Error> {
+        let client = self.client.as_mut().unwrap();
+        let pkt = client.recv_publish().await?;
+        Ok(pkt)
+    }
+
+    // async fn recv_packet(&mut self) -> Result<(tt::PacketType, tt::FixedHeader, Bytes), Error>{
+    //     let client = self.client.as_mut().unwrap();
+    //     let r = client.recv_packet().await?;
+    //     Ok(r)
     // }
 
     // async fn publish(&mut self) -> Result<(), Error> {
@@ -428,7 +461,7 @@ impl<'a> SyncConnector<'a> {
 
     async fn disconnect(&mut self) -> Result<(), Error> {
         let client = self.client.as_mut().unwrap();
-        let _r = client.disconnect(&tt::Disconnect::new()).await?;
+        let _ack = client.disconnect(&tt::Disconnect::new()).await?;
         Ok(())
     }
 
@@ -477,7 +510,7 @@ async fn clean_up(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Err
 
     let mut client = Connector::new(args, &account);
 
-    client.connect("client1").await?;
+    client.connect("clean_up").await?;
 
     let m1 = Message::new(args).with_payload(vec![]).with_retain();
     client.publish1(m1.pkt).await?;
@@ -875,24 +908,24 @@ async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     let user1 = accounts.next().unwrap();
     let user2 = accounts.next().unwrap();
     let user3 = accounts.next().unwrap();
-    let nmsgs = 20 as usize;
+    let nmsgs = 10 as usize;
 
+    
     let mut client1 = SyncConnector::new(args, &user1);
     client1.connect("client1").await?;
     client1.subscribe1(&shared_filter, args.qos).await?;
 
-    let mut client2 = Connector::new(&args, &user2);
+    let mut client2 = SyncConnector::new(&args, &user2);
     client2.connect("client2").await?;
     client2.subscribe1(&shared_filter, args.qos).await?;
 
     let args0 = args.clone();
     let send_task = async move {
-        let mut client3 = Connector::new(&args0, &user3);
+        let mut client3 = SyncConnector::new(&args0, &user3);
         client3.connect("client3").await?;
         for n in 0..nmsgs {
-            debug!("publishing message {}", n);
-            client3.publish().await?;
-            debug!("published message {}", n);
+            client3.publish_str(&format!(r#"{{"k":{}}}"#, n)).await?;
+            debug!("client3: published message {}", n);
         }
         client3.disconnect().await?;
         Ok::<(), Error>(())
@@ -911,15 +944,18 @@ async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     {
         let mut n = 0usize;
         while n < 2 {
-            client2.recv_publish0().await?;
-            debug!("got message {}", n);
+            let pkt = client2.recv_publish().await?;
+            let s = std::str::from_utf8(&pkt.payload).unwrap();
+            info!("client2: got message {}: {}", n, s);
             n += 1;
         }
         client1.disconnect().await?;
+        info!("client1: disconnected");
 
         while n < nmsgs {
-            client2.recv_publish0().await?;
-            debug!("got message {}", n);
+            let pkt = client2.recv_publish().await?;
+            let s = std::str::from_utf8(&pkt.payload).unwrap();
+            info!("client2: got message {}: {}", n, s);
             n += 1;
         }
     }
@@ -939,10 +975,14 @@ async fn verfiy(cfg: &Config, ver: tt::Protocol) -> Result<(), Error> {
         topic: "t1/t2".to_string(),
         qos: tt::QoS::AtLeastOnce,
         timeout: Duration::from_millis(cfg.raw().recv_timeout_ms),
-        payload: vec![0x11u8, 0x22],
+        payload: "{\"k\":111}".as_bytes().into(), //vec![0x11u8, 0x22],
     };
 
-    clean_up(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    // info!("payload len {}", args.payload.len());
+
+    if verification.clean_up {
+        clean_up(&args, AccountIter::new(&cfg.env().accounts)).await?;
+    }
 
     if verification.verify_basic {
         verify_basic(&args, AccountIter::new(&cfg.env().accounts)).await?;
@@ -986,7 +1026,7 @@ async fn run(cfg: Config) -> Result<(), Error> {
 #[tokio::main]
 async fn main() {
     tq3::log::tracing_subscriber::init_with_span_events(
-        tracing_subscriber::fmt::format::FmtSpan::NEW,
+        tracing_subscriber::fmt::format::FmtSpan::NONE,
     );
 
     let args = CmdArgs::parse();

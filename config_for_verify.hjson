@@ -91,6 +91,7 @@
     }
 
     verification: {
+        clean_up: true
         verify_v4: true
         verify_v5: true
         verify_basic: true
