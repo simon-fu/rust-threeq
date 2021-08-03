@@ -543,9 +543,10 @@ impl Session {
         if !pubd.is_none() {
             match &*pubd.unwrap() {
                 hub::BcData::PUB(packet) => {
-                    packet.encode_with_pktid(
+                    packet.encode_with(
                         self.conn_pkt.protocol,
                         self.next_packet_id(),
+                        packet.qos,
                         &mut obuf,
                     )?;
                 }
@@ -584,7 +585,7 @@ impl Session {
                         Ok(d) => {
                             match &*d{
                                 hub::BcData::PUB(packet) => {
-                                    packet.encode_with_pktid( self.conn_pkt.protocol, self.next_packet_id(), &mut obuf)?;
+                                    packet.encode_with( self.conn_pkt.protocol, self.next_packet_id(), packet.qos, &mut obuf)?;
                                 },
                             }
                         },

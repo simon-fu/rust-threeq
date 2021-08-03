@@ -45,7 +45,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     time::{error::Elapsed, Instant},
 };
-use tracing::{debug, error, trace};
+use tracing::{Instrument, debug, error, trace};
 
 macro_rules! trace_input {
     ($a:expr) => {{
@@ -1083,6 +1083,7 @@ impl Sender {
 
 #[derive(Debug)]
 pub struct SyncClient {
+    name: String,
     protocol: tt::Protocol,
     socket: Option<TcpStream>,
     ibuf: BytesMut,
@@ -1090,8 +1091,9 @@ pub struct SyncClient {
 }
 
 impl SyncClient {
-    pub fn new() -> Self {
+    pub fn new(name: String) -> Self {
         Self {
+            name,
             protocol: tt::Protocol::V4,
             socket: None,
             ibuf: BytesMut::new(),
@@ -1107,7 +1109,7 @@ impl SyncClient {
         self.pktid
     }
 
-    async fn recv_packet(&mut self) -> Result<(tt::PacketType, tt::FixedHeader, Bytes), Error> {
+    pub async fn recv_packet(&mut self) -> Result<(tt::PacketType, tt::FixedHeader, Bytes), Error> {
         loop {
             let r = tt::check(self.ibuf.iter(), 64 * 1024);
             match r {
@@ -1143,123 +1145,178 @@ impl SyncClient {
     }
 
     pub async fn connect(&mut self, addr: &str, pkt: &tt::Connect) -> Result<tt::ConnAck, Error> {
-        trace!("connecting to [{}]...", addr);
+        let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
+        async move {
+            trace!("connecting to [{}]...", addr);
 
-        self.protocol = pkt.protocol;
-
-        let mut socket = TcpStream::connect(&addr).await?;
-
-        let mut obuf = BytesMut::new();
-        pkt.write(&mut obuf)?;
-        trace_output!(pkt);
-        socket.write_all_buf(&mut obuf).await?;
-        self.socket = Some(socket);
-
-        let (h, bytes) = self.recv_specific_packet(tt::PacketType::ConnAck).await?;
-        let ack = tt::ConnAck::decode(self.protocol, h, bytes)?;
-        trace_input!(ack);
-
-        Ok(ack)
+            self.protocol = pkt.protocol;
+    
+            let mut socket = TcpStream::connect(&addr).await?;
+    
+            let mut obuf = BytesMut::new();
+            pkt.write(&mut obuf)?;
+            trace_output!(pkt);
+            socket.write_all_buf(&mut obuf).await?;
+            self.socket = Some(socket);
+    
+            let (h, bytes) = self.recv_specific_packet(tt::PacketType::ConnAck).await?;
+            let ack = tt::ConnAck::decode(self.protocol, h, bytes)?;
+            trace_input!(ack);
+            Ok(ack)
+        }.instrument(span) .await
     }
 
     pub async fn subscribe(&mut self, pkt: &tt::Subscribe) -> Result<tt::SubAck, Error> {
-        let pktid = self.next_pktid();
-        let socket = self.socket.as_mut().unwrap();
-        let mut obuf = BytesMut::new();
-        pkt.encode_with_pktid(self.protocol, pktid, &mut obuf)?;
-        trace_output!(pkt);
-        socket.write_all_buf(&mut obuf).await?;
-        let (h, bytes) = self.recv_specific_packet(tt::PacketType::SubAck).await?;
-        let ack = tt::SubAck::decode(self.protocol, h, bytes)?;
-        trace_input!(ack);
-        Ok(ack)
-    }
-
-    pub async fn unsubscribe(&mut self, pkt: &tt::Unsubscribe) -> Result<tt::UnsubAck, Error> {
-        let pktid = self.next_pktid();
-        let socket = self.socket.as_mut().unwrap();
-        let mut obuf = BytesMut::new();
-        pkt.encode_with_pktid(self.protocol, pktid, &mut obuf)?;
-        trace_output!(pkt);
-        socket.write_all_buf(&mut obuf).await?;
-        let (h, bytes) = self.recv_specific_packet(tt::PacketType::UnsubAck).await?;
-        let ack = tt::UnsubAck::decode(self.protocol, h, bytes)?;
-        trace_input!(ack);
-        Ok(ack)
-    }
-
-    pub async fn publish(&mut self, pkt: &tt::Publish) -> Result<(), Error> {
-        let pktid = self.next_pktid();
-        {
+        let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
+        async move {
+            let pktid = self.next_pktid();
             let socket = self.socket.as_mut().unwrap();
             let mut obuf = BytesMut::new();
             pkt.encode_with_pktid(self.protocol, pktid, &mut obuf)?;
             trace_output!(pkt);
             socket.write_all_buf(&mut obuf).await?;
-        }
+            let (h, bytes) = self.recv_specific_packet(tt::PacketType::SubAck).await?;
+            let ack = tt::SubAck::decode(self.protocol, h, bytes)?;
+            trace_input!(ack);
+            Ok(ack)
+        }.instrument(span).await
+    }
 
-        match pkt.qos {
-            tt::QoS::AtMostOnce => {
-                return Ok(());
+    pub async fn unsubscribe(&mut self, pkt: &tt::Unsubscribe) -> Result<tt::UnsubAck, Error> {
+        let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
+        async move {
+            let pktid = self.next_pktid();
+            let socket = self.socket.as_mut().unwrap();
+            let mut obuf = BytesMut::new();
+            pkt.encode_with_pktid(self.protocol, pktid, &mut obuf)?;
+            trace_output!(pkt);
+            socket.write_all_buf(&mut obuf).await?;
+            let (h, bytes) = self.recv_specific_packet(tt::PacketType::UnsubAck).await?;
+            let ack = tt::UnsubAck::decode(self.protocol, h, bytes)?;
+            trace_input!(ack);
+            Ok(ack)
+        }.instrument(span).await
+    }
+
+    pub async fn publish(&mut self, pkt: &tt::Publish) -> Result<(), Error> {
+        let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
+        async move {
+            let pktid = self.next_pktid();
+            {
+                let socket = self.socket.as_mut().unwrap();
+                let mut obuf = BytesMut::new();
+                pkt.encode_with(self.protocol, pktid, pkt.qos,&mut obuf)?;
+                trace_output!(pkt);
+                socket.write_all_buf(&mut obuf).await?;
             }
-            tt::QoS::AtLeastOnce => {
-                let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubAck).await?;
-                let ack = tt::PubAck::decode(self.protocol, h, bytes)?;
-                trace_input!(ack);
-                if ack.reason != tt::PubAckReason::Success {
-                    return Err(Error::Generic(format!("puback reason {:?}", ack.reason)));
-                } else {
+    
+            match pkt.qos {
+                tt::QoS::AtMostOnce => {
+                    return Ok(());
+                }
+                tt::QoS::AtLeastOnce => {
+                    let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubAck).await?;
+                    let ack = tt::PubAck::decode(self.protocol, h, bytes)?;
+                    trace_input!(ack);
+                    if ack.reason != tt::PubAckReason::Success {
+                        return Err(Error::Generic(format!("puback reason {:?}", ack.reason)));
+                    } else {
+                        return Ok(());
+                    }
+                }
+                tt::QoS::ExactlyOnce => {
+                    let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubRec).await?;
+                    let rec = tt::PubRec::decode(self.protocol, h, bytes)?;
+                    trace_input!(rec);
+                    if rec.reason != tt::PubRecReason::Success {
+                        return Err(Error::Generic(format!("pubrec reason {:?}", rec.reason)));
+                    }
+    
+                    let socket = self.socket.as_mut().unwrap();
+                    let mut obuf = BytesMut::new();
+    
+                    let rel = tt::PubRel::new(rec.pkid);
+                    rel.encode(self.protocol, &mut &mut obuf)?;
+                    trace_output!(rel);
+                    socket.write_all_buf(&mut obuf).await?;
+    
+                    let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubComp).await?;
+                    let comp = tt::PubComp::decode(self.protocol, h, bytes)?;
+                    trace_input!(comp);
+                    if comp.reason != tt::PubCompReason::Success {
+                        return Err(Error::Generic(format!("pubcomp reason {:?}", rec.reason)));
+                    }
+    
                     return Ok(());
                 }
             }
-            tt::QoS::ExactlyOnce => {
-                let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubRec).await?;
-                let rec = tt::PubRec::decode(self.protocol, h, bytes)?;
-                trace_input!(rec);
-                if rec.reason != tt::PubRecReason::Success {
-                    return Err(Error::Generic(format!("pubrec reason {:?}", rec.reason)));
-                }
-
-                let socket = self.socket.as_mut().unwrap();
-                let mut obuf = BytesMut::new();
-
-                let rel = tt::PubRel::new(rec.pkid);
-                rel.encode(self.protocol, &mut &mut obuf)?;
-                trace_output!(rel);
-                socket.write_all_buf(&mut obuf).await?;
-
-                let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubComp).await?;
-                let comp = tt::PubComp::decode(self.protocol, h, bytes)?;
-                trace_input!(comp);
-                if comp.reason != tt::PubCompReason::Success {
-                    return Err(Error::Generic(format!("pubcomp reason {:?}", rec.reason)));
-                }
-
-                return Ok(());
-            }
-        }
+        }.instrument(span).await
     }
 
     pub async fn recv_publish(&mut self) -> Result<tt::Publish, Error> {
-        let (h, bytes) = self.recv_specific_packet(tt::PacketType::Publish).await?;
-        let pkt = tt::Publish::decode(self.protocol, h, bytes)?;
-        trace_input!(pkt);
-        Ok(pkt)
+        let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
+        async move {
+            let (h, bytes) = self.recv_specific_packet(tt::PacketType::Publish).await?;
+            let pkt = tt::Publish::decode(self.protocol, h, bytes)?;
+            trace_input!(pkt);
+            match pkt.qos {
+                tt::QoS::AtMostOnce => {},
+                tt::QoS::AtLeastOnce => {
+                    let socket = self.socket.as_mut().unwrap();
+                    let ack = tt::PubAck::new(pkt.pkid);
+                    let mut obuf = BytesMut::new();
+                    ack.encode(self.protocol, &mut obuf)?;
+                    trace_output!(ack);
+                    socket.write_all_buf(&mut obuf).await?;
+                },
+                tt::QoS::ExactlyOnce => {
+                    let mut obuf = BytesMut::new();
+                    {
+                        let rec = tt::PubRec::new(pkt.pkid);
+                        rec.encode(self.protocol, &mut obuf)?;
+                        trace_output!(rec);
+                    }
+ 
+                    {
+                        let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubRel).await?;
+                        let rel = tt::PubRel::decode(self.protocol, h, bytes)?;
+                        if rel.pkid != pkt.pkid {
+                            return Err(Error::Generic(format!("diff pkid {}, {}", rel.pkid, pkt.pkid)));
+                        }   
+                    }
+
+                    {
+                        let comp = tt::PubComp::new(pkt.pkid);
+                        comp.encode(self.protocol, &mut obuf)?;
+                        trace_output!(comp);
+                    }
+                    let socket = self.socket.as_mut().unwrap();
+                    socket.write_all_buf(&mut obuf).await?;
+                },
+            }
+            Ok(pkt)
+        }.instrument(span).await
     }
 
     pub async fn disconnect(&mut self, pkt: &tt::Disconnect) -> Result<(), Error> {
-        let socket = self.socket.as_mut().unwrap();
-        let mut obuf = BytesMut::new();
-        pkt.encode(self.protocol, &mut obuf)?;
-        trace_output!(pkt);
-        socket.write_all_buf(&mut obuf).await?;
-        Ok(())
+        let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
+        async move {
+            let socket = self.socket.as_mut().unwrap();
+            let mut obuf = BytesMut::new();
+            pkt.encode(self.protocol, &mut obuf)?;
+            trace_output!(pkt);
+            socket.write_all_buf(&mut obuf).await?;
+            Ok(())
+        }.instrument(span).await
     }
 
     pub async fn shutdown(&mut self) -> Result<(), Error> {
-        let socket = self.socket.as_mut().unwrap();
-        socket.shutdown().await?;
-        self.socket = None;
-        Ok(())
+        let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
+        async move {
+            let socket = self.socket.as_mut().unwrap();
+            socket.shutdown().await?;
+            self.socket = None;
+            Ok(())
+        }.instrument(span).await
     }
 }

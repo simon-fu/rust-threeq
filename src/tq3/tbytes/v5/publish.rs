@@ -41,9 +41,9 @@ impl Publish {
         }
     }
 
-    pub fn len(&self, protocol: Protocol) -> usize {
+    pub fn len(&self, protocol: Protocol, qos: QoS, pkid: u16) -> usize {
         let mut len = 2 + self.topic.len();
-        if self.qos != QoS::AtMostOnce && self.pkid != 0 {
+        if qos != QoS::AtMostOnce && pkid != 0 {
             len += 2;
         }
 
@@ -112,31 +112,32 @@ impl Publish {
     }
 
     pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
-        self.encode_with_pktid(protocol, self.pkid, buffer)
+        self.encode_with(protocol, self.pkid, self.qos, buffer)
     }
 
-    pub fn encode_with_pktid(
+    pub fn encode_with(
         &self,
         protocol: Protocol,
-        pktid: u16,
+        pkid: u16,
+        qos: QoS,
         buffer: &mut BytesMut,
     ) -> Result<usize, Error> {
-        let len = self.len(protocol);
+        let len = self.len(protocol, qos, pkid);
 
         let dup = self.dup as u8;
-        let qos = self.qos as u8;
+        let qos_u8 = qos as u8;
         let retain = self.retain as u8;
-        buffer.put_u8(0b0011_0000 | retain | qos << 1 | dup << 3);
+        buffer.put_u8(0b0011_0000 | retain | qos_u8 << 1 | dup << 3);
 
         let count = write_remaining_length(buffer, len)?;
         write_mqtt_string(buffer, self.topic.as_str());
 
-        if self.qos != QoS::AtMostOnce {
-            if pktid == 0 {
+        if qos != QoS::AtMostOnce {
+            if pkid == 0 {
                 return Err(Error::PacketIdZero);
             }
 
-            buffer.put_u16(pktid);
+            buffer.put_u16(pkid);
         }
 
         match protocol {
