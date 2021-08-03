@@ -39,21 +39,21 @@
                     client_id: "$R{8}@app_id"
                 }
             ]
-        }
 
-        rest_api: {
-            url: http://api.sandbox.mqtt.chat/app/1NQ1E9/v1/rm/chat/publish
-            headers: {
-                Authorization: abc
-                content-type: application/json
+            rest_api: {
+                url: http://api.sandbox.mqtt.chat/app/1NQ1E9/v1/rm/chat/publish
+                headers: {
+                    Authorization: abc
+                    content-type: application/json
+                }
+                body: {
+                    clientid: "rest001@1NQ1E9",
+                    payload: "",
+                    topics: ["t1/t2"],
+                    encoding: base64
+                }
+                payload_in_body:["payload"]
             }
-            body: {
-                clientid: "rest001@1NQ1E9",
-                payload: "",
-                topics: ["t1/t2"],
-                encoding: base64
-            }
-            payload_in_body:["payload"]
         }
     }
     env: local
