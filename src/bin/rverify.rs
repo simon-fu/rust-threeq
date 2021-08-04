@@ -561,8 +561,6 @@ async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> R
 
     client1.connect("client1").await?;
 
-    client1.subscribe().await?;
-
     let mut client2 = Connector::new(args, &account);
 
     client2.connect("client2").await?;
@@ -578,6 +576,7 @@ async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> R
         tt::Protocol::V4 => {
             if r.is_err() {
                 if let tt::client::Error::Broken(_) = r.as_ref().unwrap_err() {
+                    debug!("got exactlly broken");
                     return Ok(());
                 }
             }
@@ -586,8 +585,16 @@ async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> R
         tt::Protocol::V5 => {
             if let Ok(ev) = &r {
                 if let tt::client::Event::Packet(pkt) = ev {
-                    if let tt::Packet::Disconnect(_) = pkt {
-                        return Ok(());
+                    if let tt::Packet::Disconnect(disonn) = pkt {
+                        if disonn.reason_code == tt::DisconnectReasonCode::SessionTakenOver {
+                            debug!("got exactlly disconnect SessionTakenOver");
+                            return Ok(());
+                        } else {
+                            return Err(Error::Generic(format!(
+                                "expect disconnect SessionTakenOver but {:?}",
+                                disonn.reason_code
+                            )));
+                        }
                     }
                 }
             }

@@ -5,6 +5,7 @@ use rand::{distributions::Alphanumeric, Rng};
 
 use regex::Regex;
 use serde::{Deserialize, Deserializer};
+
 pub trait DeserializeWith: Sized {
     fn deserialize_with<'de, D>(de: D) -> Result<Self, D::Error>
     where
@@ -398,12 +399,11 @@ impl<'a> Iterator for AccountIter<'a> {
     fn next(&mut self) -> Option<Account> {
         while let Some(a) = self.iter.next() {
             if let Some(b) = self.star {
-                if a as *const Account != b as *const Account {
-                    return Some(a.clone());
-                } else {
+                if a as *const Account == b as *const Account {
                     break;
                 }
             }
+            return Some(a.clone());
         }
 
         if let Some(star) = self.star {
