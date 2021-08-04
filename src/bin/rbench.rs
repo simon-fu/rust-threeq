@@ -726,7 +726,7 @@ impl RestSessions {
         pubid: &mut u64,
     ) -> Result<(), Error> {
         let cfg = &cfgw.raw().rest_pubs;
-        if cfg.packets == 0 {
+        if cfg.packets == 0 || cfgw.env().rest_api.url.is_empty() {
             return Ok(());
         }
 
@@ -758,6 +758,7 @@ impl RestSessions {
                     let _r = session.tx.send(TaskEvent::Error(e)).await;
                 }
             };
+            debug!("rest future size {}", std::mem::size_of_val(&f));
             let span = tracing::span!(tracing::Level::INFO, "", s = n);
             tokio::spawn(tracing::Instrument::instrument(f, span));
             *pubid += 1;
@@ -833,6 +834,7 @@ impl SubSessions {
                     let _r = tx0.send(TaskEvent::Error(e)).await;
                 }
             };
+            debug!("sub future size {}", std::mem::size_of_val(&f));
             let span = tracing::span!(tracing::Level::INFO, "", s = n);
             tokio::spawn(tracing::Instrument::instrument(f, span));
             ss.num_tasks += 1;
@@ -908,7 +910,7 @@ impl PubSessions {
                     let _r = tx0.send(TaskEvent::Error(e)).await;
                 }
             };
-
+            debug!("pub future size {}", std::mem::size_of_val(&f));
             let span = tracing::span!(tracing::Level::INFO, "", s = n);
             tokio::spawn(tracing::Instrument::instrument(f, span));
             *pubid += 1;
@@ -1000,34 +1002,37 @@ impl BenchLatency {
             .launch(cfgw.clone(), req_rx, &mut pubid)
             .await?;
 
+        let kick_time = Instant::now();
         let is_pub_packets =
             (cfg.pubs.connections > 0 && cfg.pubs.packets > 0) || cfg.rest_pubs.packets > 0;
         if is_pub_packets {
             debug!("-> kick start");
+
+            let _r = req_tx.send(TaskReq::KickXfer(kick_time));
+            self.rest_sessions.wait_for_finished().await?;
+
+            self.pub_sessions.wait_for_finished().await?;
+
+            let r = timeout(Duration::from_millis(1000), async {
+                self.sub_sessions.wait_for_finished().await
+            })
+            .await;
+
+            match r {
+                Ok(r0) => {
+                    r0?;
+                }
+                Err(_) => {
+                    warn!("waiting for sub result timeout, send stop");
+                    let _r = req_tx.send(TaskReq::Stop);
+                    self.sub_sessions.wait_for_finished().await?;
+                }
+            }
         } else {
             debug!("wait for connections down...");
-        }
-        let kick_time = Instant::now();
-        let _r = req_tx.send(TaskReq::KickXfer(kick_time));
-
-        self.rest_sessions.wait_for_finished().await?;
-
-        self.pub_sessions.wait_for_finished().await?;
-
-        let r = timeout(Duration::from_millis(1000), async {
-            self.sub_sessions.wait_for_finished().await
-        })
-        .await;
-
-        match r {
-            Ok(r0) => {
-                r0?;
-            }
-            Err(_) => {
-                warn!("waiting for sub result timeout, send stop");
-                let _r = req_tx.send(TaskReq::Stop);
-                self.sub_sessions.wait_for_finished().await?;
-            }
+            self.rest_sessions.wait_for_finished().await?;
+            self.pub_sessions.wait_for_finished().await?;
+            self.sub_sessions.wait_for_finished().await?;
         }
 
         debug!("<- all done");

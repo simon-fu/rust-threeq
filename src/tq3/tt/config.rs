@@ -98,11 +98,11 @@ pub struct Account {
     pub client_id: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Environment {
     pub address: String,
     pub accounts: Vec<Account>,
-    #[serde(default = "RestApiArg::default")]
+    #[serde(default = "RestApiArg::new")]
     pub rest_api: RestApiArg,
 }
 
@@ -223,7 +223,7 @@ impl VerificationArgs {
     }
 }
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RestApiArg {
     pub url: String,
     pub headers: HashMap<String, String>,
@@ -232,14 +232,16 @@ pub struct RestApiArg {
 }
 
 impl RestApiArg {
-    // pub fn new() -> RestApiArg {
-    //     hjson_default_value(r#"{
-    //         "url": ""
-    //         "headers": { }
-    //         "body": { }
-    //         payload_in_body:[""]
-    //     }"#)
-    // }
+    pub fn new() -> RestApiArg {
+        hjson_default_value(
+            r#"{
+            "url": ""
+            "headers": { }
+            "body": { }
+            payload_in_body:[]
+        }"#,
+        )
+    }
 
     pub fn get_body_in<'a>(
         fields: &Vec<String>,
@@ -268,10 +270,13 @@ impl RestApiArg {
         if let serde_json::Value::String(s) = v {
             return s;
         }
-        panic!("never reach here");
+        panic!("never reach here, v {:?}", v);
     }
 
     pub fn make_body(&self, root: &mut serde_json::Value, str: String) -> String {
+        if self.payload_in_body.is_empty() {
+            return "".to_string();
+        }
         let s = self.get_body_mut(root);
         *s = str;
         serde_json::to_string(root).unwrap()
