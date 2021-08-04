@@ -404,6 +404,10 @@ impl<'a> SyncConnector<'a> {
         Ok(pkt)
     }
 
+    fn name(&self) -> &String {
+        self.client.as_ref().unwrap().name()
+    }
+
     // async fn recv_packet(&mut self) -> Result<(tt::PacketType, tt::FixedHeader, Bytes), Error>{
     //     let client = self.client.as_mut().unwrap();
     //     let r = client.recv_packet().await?;
@@ -893,6 +897,16 @@ async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), 
     Ok(())
 }
 
+async fn client_recv(client : &mut SyncConnector<'_>, n: &mut usize, max_num: usize) -> Result<(), Error> {
+    while *n < max_num {
+        let pkt = client.recv_publish().await?;
+        let s = std::str::from_utf8(&pkt.payload).unwrap();
+        info!("{}: got message {}: {}", client.name(), *n, s);
+        *n += 1;
+    }
+    Ok(())
+}
+
 #[instrument(skip(args, accounts), name = "shared", level = "debug")]
 async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
     // - will message
@@ -936,27 +950,27 @@ async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
             }
         }
     });
+    let _r = h.await;
 
     {
-        let mut n = 0usize;
-        while n < 2 {
-            let pkt = client2.recv_publish().await?;
-            let s = std::str::from_utf8(&pkt.payload).unwrap();
-            info!("client2: got message {}: {}", n, s);
-            n += 1;
-        }
+        let mut n2 = 0usize;
+        client_recv(&mut client2, &mut n2, 2).await?;
+
         client1.disconnect().await?;
         info!("client1: disconnected");
 
-        while n < nmsgs {
-            let pkt = client2.recv_publish().await?;
-            let s = std::str::from_utf8(&pkt.payload).unwrap();
-            info!("client2: got message {}: {}", n, s);
-            n += 1;
-        }
+        client_recv(&mut client2, &mut n2, 4).await?;
+        
+        client1 = SyncConnector::new(args, &user1);
+        client1.connect("client1").await?;
+        client1.subscribe1(&shared_filter, args.qos).await?;
+        let mut n1 = 0;
+        client_recv(&mut client1, &mut n1, nmsgs).await?;
+
+        client_recv(&mut client2, &mut n2, nmsgs).await?;
     }
 
-    let _r = h.await;
+    
     client2.disconnect().await?;
 
     Ok(())

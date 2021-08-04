@@ -1101,6 +1101,10 @@ impl SyncClient {
         }
     }
 
+    pub fn name(&self) -> &String {
+        &self.name
+    }
+
     fn next_pktid(&mut self) -> u16 {
         self.pktid += 1;
         if self.pktid == 0 {
