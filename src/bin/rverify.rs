@@ -897,7 +897,11 @@ async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), 
     Ok(())
 }
 
-async fn client_recv(client : &mut SyncConnector<'_>, n: &mut usize, max_num: usize) -> Result<(), Error> {
+async fn client_recv(
+    client: &mut SyncConnector<'_>,
+    n: &mut usize,
+    max_num: usize,
+) -> Result<(), Error> {
     while *n < max_num {
         let pkt = client.recv_publish().await?;
         let s = std::str::from_utf8(&pkt.payload).unwrap();
@@ -960,7 +964,7 @@ async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
         info!("client1: disconnected");
 
         client_recv(&mut client2, &mut n2, 4).await?;
-        
+
         client1 = SyncConnector::new(args, &user1);
         client1.connect("client1").await?;
         client1.subscribe1(&shared_filter, args.qos).await?;
@@ -970,7 +974,6 @@ async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
         client_recv(&mut client2, &mut n2, nmsgs).await?;
     }
 
-    
     client2.disconnect().await?;
 
     Ok(())
