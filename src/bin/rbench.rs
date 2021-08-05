@@ -776,7 +776,8 @@ impl RestSessions {
 
     pub async fn wait_for_finished(&mut self) -> Result<(), Error> {
         if self.merge_task.is_some() {
-            let ss = self.merge_task.take().unwrap().await??;
+            let ss = self.merge_task.as_mut().unwrap().await??;
+            self.merge_task.take();
             self.sessions = Some(ss);
         }
         Ok(())
@@ -853,7 +854,8 @@ impl SubSessions {
 
     pub async fn wait_for_finished(&mut self) -> Result<(), Error> {
         if self.merge_task.is_some() {
-            let ss = self.merge_task.take().unwrap().await??;
+            let ss = self.merge_task.as_mut().unwrap().await??;
+            self.merge_task.take();
             self.sessions = Some(ss);
         }
         Ok(())
@@ -932,7 +934,8 @@ impl PubSessions {
 
     pub async fn wait_for_finished(&mut self) -> Result<(), Error> {
         if self.merge_task.is_some() {
-            let ss = self.merge_task.take().unwrap().await??;
+            let ss = self.merge_task.as_mut().unwrap().await??;
+            self.merge_task.take();
             self.sessions = Some(ss);
         }
         Ok(())
@@ -1019,7 +1022,7 @@ impl BenchLatency {
 
             self.pub_sessions.wait_for_finished().await?;
 
-            let r = timeout(Duration::from_millis(1000), async {
+            let r = timeout(Duration::from_millis(cfg.recv_timeout_ms), async {
                 self.sub_sessions.wait_for_finished().await
             })
             .await;
