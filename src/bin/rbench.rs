@@ -760,7 +760,7 @@ impl RestSessions {
                     let _r = session.tx.send(TaskEvent::Error(e)).await;
                 }
             };
-            debug!("rest future size {}", std::mem::size_of_val(&f));
+            // debug!("rest future size {}", std::mem::size_of_val(&f));
             let span = tracing::span!(tracing::Level::INFO, "", s = n);
             tokio::spawn(tracing::Instrument::instrument(f, span));
             *pubid += 1;
@@ -838,7 +838,7 @@ impl SubSessions {
                     let _r = tx0.send(TaskEvent::Error(e)).await;
                 }
             };
-            debug!("sub future size {}", std::mem::size_of_val(&f));
+            // debug!("sub future size {}", std::mem::size_of_val(&f));
             let span = tracing::span!(tracing::Level::INFO, "", s = n);
             tokio::spawn(tracing::Instrument::instrument(f, span));
             ss.num_tasks += 1;
@@ -916,7 +916,7 @@ impl PubSessions {
                     let _r = tx0.send(TaskEvent::Error(e)).await;
                 }
             };
-            debug!("pub future size {}", std::mem::size_of_val(&f));
+            // debug!("pub future size {}", std::mem::size_of_val(&f));
             let span = tracing::span!(tracing::Level::INFO, "", s = n);
             tokio::spawn(tracing::Instrument::instrument(f, span));
             *pubid += 1;
