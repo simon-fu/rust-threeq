@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 use tokio::{
     sync::{mpsc, watch},
     task::JoinError,
+    time::error::Elapsed,
     time::timeout,
 };
 use tracing::{debug, error, info, trace, warn};
@@ -41,6 +42,9 @@ pub enum Error {
 
     #[error("{0}")]
     JoinError(#[from] JoinError),
+
+    #[error("{0}")]
+    Timeout(#[from] Elapsed),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -583,6 +587,7 @@ impl Sessions {
 
     async fn wait_for_ready(&mut self, ev_rx: &mut EVRecver) -> Result<(), Error> {
         if self.num_readys < self.num_tasks {
+            debug!("waiting for connections ready...");
             while self.num_readys < self.num_tasks {
                 self.recv_event(ev_rx).await?;
             }
@@ -741,8 +746,9 @@ impl RestSessions {
         while ss.num_tasks < connections {
             if let Some(d) = pacer.get_sleep_duration(ss.num_tasks) {
                 if ss.num_readys < ss.num_tasks {
-                    ss.try_recv_event(&mut ev_rx).await?;
-                    continue;
+                    if ss.try_recv_event(&mut ev_rx).await? {
+                        continue;
+                    }
                 }
                 tokio::time::sleep(d).await;
             }
@@ -821,8 +827,9 @@ impl SubSessions {
         while ss.num_tasks < cfg.connections {
             if let Some(d) = pacer.get_sleep_duration(ss.num_tasks) {
                 if ss.num_readys < ss.num_tasks {
-                    ss.try_recv_event(&mut ev_rx).await?;
-                    continue;
+                    if ss.try_recv_event(&mut ev_rx).await? {
+                        continue;
+                    }
                 }
                 tokio::time::sleep(d).await;
             }
@@ -900,8 +907,9 @@ impl PubSessions {
         while ss.num_tasks < cfg.connections {
             if let Some(d) = pacer.get_sleep_duration(ss.num_tasks) {
                 if ss.num_readys < ss.num_tasks {
-                    ss.try_recv_event(&mut ev_rx).await?;
-                    continue;
+                    if ss.try_recv_event(&mut ev_rx).await? {
+                        continue;
+                    }
                 }
                 tokio::time::sleep(d).await;
             }
