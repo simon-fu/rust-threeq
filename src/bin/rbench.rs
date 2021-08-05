@@ -726,13 +726,15 @@ impl RestSessions {
         pubid: &mut u64,
     ) -> Result<(), Error> {
         let cfg = &cfgw.raw().rest_pubs;
-        if cfg.packets == 0 || cfgw.env().rest_api.url.is_empty() {
-            return Ok(());
-        }
 
         let connections = 1u64;
         let mut ss = Box::new(Sessions::default());
         ss.customize(&self.name, connections);
+
+        if cfg.packets == 0 || cfgw.env().rest_api.url.is_empty() {
+            self.sessions = Some(ss);
+            return Ok(());
+        }
 
         let (ev_tx, mut ev_rx) = mpsc::channel(10240);
         let pacer = tq3::limit::Pacer::new(connections);
@@ -804,12 +806,14 @@ impl SubSessions {
         accounts: &mut AccountIter<'_>,
     ) -> Result<(), Error> {
         let cfg = &cfgw.raw().subs;
-        if cfg.connections == 0 {
-            return Ok(());
-        }
 
         let mut ss = Box::new(Sessions::default());
         ss.customize(&self.name, cfg.connections);
+
+        if cfg.connections == 0 {
+            self.sessions = Some(ss);
+            return Ok(());
+        }
 
         let (ev_tx, mut ev_rx) = mpsc::channel(10240);
         let pacer = tq3::limit::Pacer::new(cfg.conn_per_sec);
@@ -880,12 +884,14 @@ impl PubSessions {
         pubid: &mut u64,
     ) -> Result<(), Error> {
         let cfg = &cfgw.raw().pubs;
-        if cfg.connections == 0 {
-            return Ok(());
-        }
 
         let mut ss = Box::new(Sessions::default());
         ss.customize(&self.name, cfg.connections);
+
+        if cfg.connections == 0 {
+            self.sessions = Some(ss);
+            return Ok(());
+        }
 
         let (ev_tx, mut ev_rx) = mpsc::channel(10240);
         let pacer = tq3::limit::Pacer::new(cfg.conn_per_sec);
