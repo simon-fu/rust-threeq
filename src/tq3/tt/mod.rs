@@ -1,5 +1,5 @@
 use super::tbytes;
-use std::slice::Iter;
+use std::{num::Wrapping, slice::Iter};
 
 pub mod client;
 
@@ -100,4 +100,33 @@ pub fn check(mut stream: Iter<u8>, max_packet_size: usize) -> Result<FixedHeader
     // let packet_type = decode_type(*byte1)?;
 
     Ok(FixedHeader::new(*byte1, len_len, len))
+}
+
+#[derive(Debug)]
+pub struct PacketId(Wrapping<u16>);
+
+impl Default for PacketId {
+    #[inline(always)]
+    fn default() -> Self {
+        Self(Wrapping(0))
+    }
+}
+
+impl Iterator for PacketId {
+    type Item = u16;
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0 += Wrapping(1);
+        if self.0 .0 == 0 {
+            self.0 .0 = 1;
+        }
+        Some(self.0 .0)
+    }
+}
+
+impl PacketId {
+    #[inline(always)]
+    fn get(&self) -> u16 {
+        self.0 .0
+    }
 }

@@ -215,7 +215,7 @@ struct Session {
     max_incoming_size: usize,
     keep_alive_ms: u64,
     conn_pkt: tt::Connect,
-    packet_id: u16,
+    packet_id: tt::PacketId,
     last_active_time: Instant,
     tx: broadcast::Sender<Arc<hub::BcData>>,
     rx: broadcast::Receiver<Arc<hub::BcData>>,
@@ -233,7 +233,7 @@ impl Session {
             max_incoming_size: 64 * 1024,
             keep_alive_ms: 30 * 1000,
             conn_pkt: tt::Connect::new(""),
-            packet_id: 0,
+            packet_id: tt::PacketId::default(),
             last_active_time: Instant::now(),
             tx,
             rx,
@@ -262,14 +262,6 @@ impl Session {
         if self.keep_alive_ms == 0 {
             self.keep_alive_ms = 30 * 1000;
         }
-    }
-
-    fn next_packet_id(&mut self) -> u16 {
-        self.packet_id += 1;
-        if self.packet_id == 0 {
-            self.packet_id = 1;
-        }
-        return self.packet_id;
     }
 
     fn check_alive(&self) -> AppResult<u64> {
@@ -545,7 +537,7 @@ impl Session {
                 hub::BcData::PUB(packet) => {
                     packet.encode_with(
                         self.conn_pkt.protocol,
-                        self.next_packet_id(),
+                        self.packet_id.next().unwrap(),
                         packet.qos,
                         &mut obuf,
                     )?;
@@ -585,7 +577,7 @@ impl Session {
                         Ok(d) => {
                             match &*d{
                                 hub::BcData::PUB(packet) => {
-                                    packet.encode_with( self.conn_pkt.protocol, self.next_packet_id(), packet.qos, &mut obuf)?;
+                                    packet.encode_with( self.conn_pkt.protocol, self.packet_id.next().unwrap(), packet.qos, &mut obuf)?;
                                 },
                             }
                         },

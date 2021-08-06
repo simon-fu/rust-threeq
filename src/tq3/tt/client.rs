@@ -38,7 +38,7 @@ Events:
 use crate::tq3::tt;
 use bytes::{Bytes, BytesMut};
 use core::panic;
-use std::{collections::HashMap, convert::TryFrom, num::Wrapping, time::Duration};
+use std::{collections::HashMap, convert::TryFrom, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -182,7 +182,7 @@ struct Session {
     max_osize: usize,
     tx: mpsc::Sender<Response>,
     state: State,
-    pktid: Wrapping<u16>,
+    pktid: tt::PacketId,
     max_incoming_size: usize,
     conn_pkt: Option<tt::Connect>,
     inflight: HashMap<u16, Request>,
@@ -196,21 +196,13 @@ impl Session {
             max_osize: 16 * 1024,
             tx,
             state: State::Ready,
-            pktid: Wrapping(0),
+            pktid: tt::PacketId::default(),
             max_incoming_size: 64 * 1024,
             conn_pkt: None,
             inflight: Default::default(),
             qos2_rsp: Default::default(),
             last_active_time: now,
         }
-    }
-
-    fn next_pktid(&mut self) -> u16 {
-        self.pktid += Wrapping(1);
-        if self.pktid.0 == 0 {
-            self.pktid.0 = 1;
-        }
-        self.pktid.0
     }
 
     fn get_protocol(&self) -> tt::Protocol {
@@ -610,7 +602,7 @@ impl Session {
     }
 
     async fn response_disconnect(&mut self, reason: &str) -> Result<(), Error> {
-        match self.inflight.remove(&self.pktid.0) {
+        match self.inflight.remove(&self.pktid.get()) {
             Some(req) => self.rsp_event(req.tx, Event::Closed(reason.into())).await?,
             None => {}
         };
@@ -653,7 +645,7 @@ impl Session {
         self.check_state(State::Working, "exec_subscribe")?;
 
         if pkt.pkid == 0 {
-            pkt.pkid = self.next_pktid();
+            pkt.pkid = self.pktid.next().unwrap();
         }
 
         pkt.encode(self.get_protocol(), obuf)?;
@@ -670,7 +662,7 @@ impl Session {
         self.check_state(State::Working, "exec_unsubscribe")?;
 
         if pkt.pkid == 0 {
-            pkt.pkid = self.next_pktid();
+            pkt.pkid = self.pktid.next().unwrap();
         }
 
         pkt.encode(self.get_protocol(), obuf)?;
@@ -687,7 +679,7 @@ impl Session {
         self.check_state(State::Working, "exec_publish")?;
 
         if pkt.pkid == 0 && pkt.qos != tt::QoS::AtMostOnce {
-            pkt.pkid = self.next_pktid();
+            pkt.pkid = self.pktid.next().unwrap();
         }
 
         pkt.encode(self.get_protocol(), obuf)?;
@@ -708,7 +700,7 @@ impl Session {
 
         self.state = State::Disconnecting;
 
-        Ok((self.next_pktid(), true))
+        Ok((self.pktid.next().unwrap(), true))
     }
 
     async fn exec_req(
@@ -1087,7 +1079,7 @@ pub struct SyncClient {
     protocol: tt::Protocol,
     socket: Option<TcpStream>,
     ibuf: BytesMut,
-    pktid: u16,
+    pktid: tt::PacketId,
 }
 
 impl SyncClient {
@@ -1097,20 +1089,12 @@ impl SyncClient {
             protocol: tt::Protocol::V4,
             socket: None,
             ibuf: BytesMut::new(),
-            pktid: 0,
+            pktid: tt::PacketId::default(),
         }
     }
 
     pub fn name(&self) -> &String {
         &self.name
-    }
-
-    fn next_pktid(&mut self) -> u16 {
-        self.pktid += 1;
-        if self.pktid == 0 {
-            self.pktid = 1;
-        }
-        self.pktid
     }
 
     pub async fn recv_packet(&mut self) -> Result<(tt::PacketType, tt::FixedHeader, Bytes), Error> {
@@ -1175,7 +1159,7 @@ impl SyncClient {
     pub async fn subscribe(&mut self, pkt: &tt::Subscribe) -> Result<tt::SubAck, Error> {
         let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
         async move {
-            let pktid = self.next_pktid();
+            let pktid = self.pktid.next().unwrap();
             let socket = self.socket.as_mut().unwrap();
             let mut obuf = BytesMut::new();
             pkt.encode_with_pktid(self.protocol, pktid, &mut obuf)?;
@@ -1193,7 +1177,7 @@ impl SyncClient {
     pub async fn unsubscribe(&mut self, pkt: &tt::Unsubscribe) -> Result<tt::UnsubAck, Error> {
         let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
         async move {
-            let pktid = self.next_pktid();
+            let pktid = self.pktid.next().unwrap();
             let socket = self.socket.as_mut().unwrap();
             let mut obuf = BytesMut::new();
             pkt.encode_with_pktid(self.protocol, pktid, &mut obuf)?;
@@ -1211,7 +1195,7 @@ impl SyncClient {
     pub async fn publish(&mut self, pkt: &tt::Publish) -> Result<(), Error> {
         let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
         async move {
-            let pktid = self.next_pktid();
+            let pktid = self.pktid.next().unwrap();
             {
                 let socket = self.socket.as_mut().unwrap();
                 let mut obuf = BytesMut::new();
