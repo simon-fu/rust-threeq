@@ -3,7 +3,7 @@ use std::{num::Wrapping, slice::Iter};
 
 pub mod client;
 
-pub mod config;
+// pub mod config;
 
 pub mod topic;
 

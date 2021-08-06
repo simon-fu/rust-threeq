@@ -20,12 +20,11 @@
 
 use std::time::Duration;
 
+use super::config::*;
 use clap::Clap;
-use rust_threeq::tq3;
 use rust_threeq::tq3::tt;
 use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, Instrument, Span};
-use tt::config::*;
 
 // #[macro_use]
 // extern crate serde_derive;
@@ -507,6 +506,8 @@ struct VArgs {
 
 #[instrument(skip(args, accounts), level = "debug")]
 async fn clean_up(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+    debug!("");
+
     let account = accounts.next().unwrap();
 
     let mut client = Connector::new(args, &account);
@@ -525,6 +526,8 @@ async fn clean_up(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Err
 
 #[instrument(skip(args, accounts), name = "basic", level = "debug")]
 async fn verify_basic(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+    debug!("");
+
     let account = accounts.next().unwrap();
 
     let mut client = Connector::new(args, &account);
@@ -555,6 +558,8 @@ async fn verify_basic(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(),
 
 #[instrument(skip(args, accounts), name = "same_client_id", level = "debug")]
 async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+    debug!("");
+
     let account = accounts.next().unwrap();
 
     let mut client1 = Connector::new(args, &account);
@@ -626,6 +631,8 @@ async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Re
         - receive m1 timeout
         - disconnect
     */
+
+    debug!("");
 
     let user1 = accounts.next().unwrap();
     let user2 = accounts.next().unwrap();
@@ -719,6 +726,8 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
             - user 2: receive m7(without retain), m8(with retain), m9(without retain)
             - user 3: connect and recevie m8, with retain
     */
+
+    debug!("");
 
     let user1 = accounts.next().unwrap();
     let user2 = accounts.next().unwrap();
@@ -879,6 +888,8 @@ async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), 
     // - user 1: receive m1
     // - user 3: connect and subscribe, recevie timeout
 
+    debug!("");
+
     let user1 = accounts.next().unwrap();
     let user2 = accounts.next().unwrap();
     let user3 = accounts.next().unwrap();
@@ -925,6 +936,9 @@ async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
     // - user 2: connect with will m1 and shutdown socket
     // - user 1: receive m1
     // - user 3: connect and subscribe, recevie timeout
+
+    debug!("");
+
     let shared_filter = format!("$share/group1/{}", args.topic);
 
     let user1 = accounts.next().unwrap();
@@ -1031,7 +1045,7 @@ async fn verfiy(cfg: &Config, ver: tt::Protocol) -> Result<(), Error> {
     Ok(())
 }
 
-async fn run(cfg: Config) -> Result<(), Error> {
+async fn run0(cfg: Config) -> Result<(), Error> {
     if cfg.verification().verify_v4 {
         verfiy(&cfg, tt::Protocol::V4).await?;
     }
@@ -1043,35 +1057,15 @@ async fn run(cfg: Config) -> Result<(), Error> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() {
-    tq3::log::tracing_subscriber::init_with_span_events(
-        tracing_subscriber::fmt::format::FmtSpan::NONE,
-    );
-
-    let args = CmdArgs::parse();
-
-    // let mut cfg = Config::default();
-    // if let Some(fname) = &args.config {
-    //     debug!("loading config file [{}]...", fname);
-    //     let mut c = config::Config::default();
-    //     c.merge(config::File::with_name(fname)).unwrap();
-    //     cfg = c.try_into().unwrap();
-    //     debug!("loaded config file [{}]", fname);
-    // }
-
-    let cfg = if let Some(fname) = &args.config {
-        tt::config::Config::load_from_file(fname)
-    } else {
-        tt::config::Config::default()
-    };
+pub async fn run(config_file: &str) {
+    let cfg = Config::load_from_file(config_file);
 
     debug!("cfg=[{:?}]", cfg);
     info!("-");
     info!("env=[{}]", cfg.raw().env);
     info!("-");
 
-    match run(cfg).await {
+    match run0(cfg).await {
         Ok(_) => {
             info!("final ok");
         }

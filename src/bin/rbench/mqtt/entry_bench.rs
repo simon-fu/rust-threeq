@@ -1,11 +1,8 @@
-use std::{
-    fmt::Debug,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use super::config as app;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use clap::Clap;
 use histogram::Histogram;
 use rust_threeq::tq3::{self, tt, TryRecv, TryRecvResult, TS};
 use tokio::task::JoinHandle;
@@ -16,15 +13,6 @@ use tokio::{
     time::timeout,
 };
 use tracing::{debug, error, info, trace, warn};
-use tt::config::*;
-
-// refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
-#[derive(Clap, Debug, Default)]
-#[clap(name = "threeq bench", author, about, version)]
-struct CmdArgs {
-    #[clap(short = 'c', long = "config", long_about = "config file.")]
-    config: String,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -161,8 +149,8 @@ async fn wait_for_req(rx: &mut ReqRecver) -> Result<TaskReq, Error> {
 
 async fn sub_task(
     subid: u64,
-    cfgw: Arc<tt::config::Config>,
-    acc: Account,
+    cfgw: Arc<app::Config>,
+    acc: app::Account,
     tx: &EVSender,
     mut rx: ReqRecver,
 ) -> Result<(), Error> {
@@ -172,7 +160,7 @@ async fn sub_task(
             .await?
             .split();
 
-    let mut pkt = init_conn_pkt(&acc, cfgw.raw().subs.protocol);
+    let mut pkt = app::init_conn_pkt(&acc, cfgw.raw().subs.protocol);
     pkt.clean_session = cfgw.raw().subs.clean_session;
     pkt.keep_alive = cfgw.raw().subs.keep_alive_secs as u16;
     let ack = sender.connect(pkt).await?;
@@ -298,8 +286,8 @@ async fn sub_task(
 
 async fn pub_task(
     pubid: u64,
-    cfgw: Arc<tt::config::Config>,
-    acc: Account,
+    cfgw: Arc<app::Config>,
+    acc: app::Account,
     tx: &EVSender,
     mut rx: ReqRecver,
 ) -> Result<(), Error> {
@@ -309,7 +297,7 @@ async fn pub_task(
             .await?
             .split();
 
-    let mut pkt = init_conn_pkt(&acc, cfgw.raw().pubs.protocol);
+    let mut pkt = app::init_conn_pkt(&acc, cfgw.raw().pubs.protocol);
     pkt.clean_session = cfgw.raw().pubs.clean_session;
     pkt.keep_alive = cfgw.raw().pubs.keep_alive_secs as u16;
     sender.connect(pkt).await?;
@@ -615,17 +603,17 @@ impl Sessions {
 
 #[derive(Debug)]
 struct RestSession {
-    cfg: Arc<tt::config::Config>,
+    cfg: Arc<app::Config>,
     tx: EVSender,
     rx: ReqRecver,
 }
 
 impl RestSession {
-    pub fn new(cfg: Arc<tt::config::Config>, tx: EVSender, rx: ReqRecver) -> Self {
+    pub fn new(cfg: Arc<app::Config>, tx: EVSender, rx: ReqRecver) -> Self {
         Self { cfg, tx, rx }
     }
 
-    pub async fn call_rest(cfg: &RestApiArg, s: String) -> Result<(), reqwest::Error> {
+    pub async fn call_rest(cfg: &app::RestApiArg, s: String) -> Result<(), reqwest::Error> {
         let req_body = cfg.make_body(&mut cfg.body.clone(), s);
 
         {
@@ -726,7 +714,7 @@ impl RestSessions {
 
     pub async fn launch(
         &mut self,
-        cfgw: Arc<tt::config::Config>,
+        cfgw: Arc<app::Config>,
         req_rx: &ReqRecver,
         pubid: &mut u64,
     ) -> Result<(), Error> {
@@ -808,9 +796,9 @@ impl SubSessions {
 
     pub async fn launch(
         &mut self,
-        cfgw: Arc<tt::config::Config>,
+        cfgw: Arc<app::Config>,
         req_rx: &ReqRecver,
-        accounts: &mut AccountIter<'_>,
+        accounts: &mut app::AccountIter<'_>,
     ) -> Result<(), Error> {
         let cfg = &cfgw.raw().subs;
 
@@ -887,9 +875,9 @@ impl PubSessions {
 
     pub async fn launch(
         &mut self,
-        cfgw: Arc<tt::config::Config>,
+        cfgw: Arc<app::Config>,
         req_rx: &ReqRecver,
-        accounts: &mut AccountIter<'_>,
+        accounts: &mut app::AccountIter<'_>,
         pubid: &mut u64,
     ) -> Result<(), Error> {
         let cfg = &cfgw.raw().pubs;
@@ -965,7 +953,7 @@ impl BenchLatency {
             rest_sessions: RestSessions::new("rest".to_string()),
         }
     }
-    fn print(&self, cfg: &Arc<tt::config::Config>, kick_time: &Instant) {
+    fn print(&self, cfg: &Arc<app::Config>, kick_time: &Instant) {
         let pub_sessions = self.pub_sessions.sessions.as_ref().unwrap();
         let sub_sessions = self.sub_sessions.sessions.as_ref().unwrap();
 
@@ -996,7 +984,7 @@ impl BenchLatency {
 
     pub async fn bench_priv(
         &mut self,
-        cfgw: Arc<tt::config::Config>,
+        cfgw: Arc<app::Config>,
         req_tx: &mut watch::Sender<TaskReq>,
         req_rx: &mut watch::Receiver<TaskReq>,
     ) -> Result<(), Error> {
@@ -1006,7 +994,7 @@ impl BenchLatency {
         info!("address: [{}]", cfgw.env().address);
         info!("");
 
-        let mut accounts = AccountIter::new(&cfgw.env().accounts);
+        let mut accounts = app::AccountIter::new(&cfgw.env().accounts);
         let mut pubid = 0u64;
 
         self.sub_sessions
@@ -1064,7 +1052,7 @@ impl BenchLatency {
         Ok(())
     }
 
-    pub async fn bench(&mut self, cfg: Arc<tt::config::Config>) -> Result<(), Error> {
+    pub async fn bench(&mut self, cfg: Arc<app::Config>) -> Result<(), Error> {
         let (mut req_tx, mut req_rx) = watch::channel(TaskReq::Ready);
         let r = self.bench_priv(cfg, &mut req_tx, &mut req_rx).await;
         // let _r = req_tx.send(TaskReq::Stop);
@@ -1072,45 +1060,18 @@ impl BenchLatency {
     }
 }
 
-// async fn test() -> Result<(), reqwest::Error>{
-//     std::process::exit(0);
-// }
-
-#[tokio::main]
-async fn main() {
-    tq3::log::tracing_subscriber::init();
-
-    let args = CmdArgs::parse();
-    let cfg = tt::config::Config::load_from_file(&args.config);
+pub async fn run(config_file: &str) {
+    let cfg = app::Config::load_from_file(&config_file);
     trace!("cfg=[{:#?}]", cfg.raw());
+    let cfg = Arc::new(cfg);
+    let mut bencher = BenchLatency::new();
 
-    // {
-
-    //     info!("module_path {}", module_path!());
-    //     let api = &cfg.env().rest_api;
-    //     let mut body = api.body.clone();
-
-    //     // info!("req body1={:?}", api.make_body(&mut body, base64::encode(b"111111") ) );
-    //     // info!("req body2={:?}", api.make_body(&mut body, base64::encode(b"222222") ) );
-
-    //     // let _r = RestSession::call_rest(api, base64::encode(b"123") ).await;
-
-    //     if !cfg.raw().env.is_empty() {
-    //         std::process::exit(0);
-    //     }
-    // }
-
-    {
-        let cfg = Arc::new(cfg);
-        let mut bencher = BenchLatency::new();
-
-        match bencher.bench(cfg).await {
-            Ok(_) => {
-                // info!("bench result ok");
-            }
-            Err(e) => {
-                error!("bench result error [{}]", e);
-            }
+    match bencher.bench(cfg).await {
+        Ok(_) => {
+            // info!("bench result ok");
+        }
+        Err(e) => {
+            error!("bench result error [{}]", e);
         }
     }
 }

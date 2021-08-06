@@ -4,7 +4,7 @@ use crate::tq3::tt;
 use rand::{distributions::Alphanumeric, Rng};
 
 use regex::Regex;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 pub trait DeserializeWith: Sized {
     fn deserialize_with<'de, D>(de: D) -> Result<Self, D::Error>
@@ -482,14 +482,14 @@ impl<'t> VarStr {
         return self0;
     }
 
-    pub fn new_option(text: &str) -> Option<Self> {
-        let v = Self::new(text);
-        if v.nvars() > 0 {
-            Some(v)
-        } else {
-            None
-        }
-    }
+    // pub fn new_option(text: &str) -> Option<Self> {
+    //     let v = Self::new(text);
+    //     if v.nvars() > 0 {
+    //         Some(v)
+    //     } else {
+    //         None
+    //     }
+    // }
 
     pub fn nvars(&self) -> usize {
         self.vars.len()
@@ -518,24 +518,24 @@ impl<'t> VarStr {
         });
     }
 
-    pub fn fill(&self, c: char) -> String {
-        return self.make(|s| {
-            for v in s {
-                *v = c;
-            }
-        });
-    }
+    // pub fn fill(&self, c: char) -> String {
+    //     return self.make(|s| {
+    //         for v in s {
+    //             *v = c;
+    //         }
+    //     });
+    // }
 
-    pub fn number(&self) -> String {
-        lazy_static::lazy_static! {
-            static ref NUMBER:Vec<char> = vec!['0', '1', '2', '3', '4', '5', '6', '7', '8', '9',];
-        }
-        return self.make(|s| {
-            let mut i = 0;
-            for v in s {
-                *v = NUMBER[i % NUMBER.len()];
-                i += 1;
-            }
-        });
-    }
+    // pub fn number(&self) -> String {
+    //     lazy_static::lazy_static! {
+    //         static ref NUMBER:Vec<char> = vec!['0', '1', '2', '3', '4', '5', '6', '7', '8', '9',];
+    //     }
+    //     return self.make(|s| {
+    //         let mut i = 0;
+    //         for v in s {
+    //             *v = NUMBER[i % NUMBER.len()];
+    //             i += 1;
+    //         }
+    //     });
+    // }
 }

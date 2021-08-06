@@ -60,6 +60,10 @@ actix-web = "4.0.0-beta.8"
 # enum-as-inner = "^0.3.3"
 base64 = "^0.13.0"
 
+# disable zstd feature of pulsar for conflicting with actix-web, 
+pulsar = { version = "^4.0.0", default-features = false, features = ["tokio-runtime", "lz4", "flate2", "snap"] } 
+
+
 [dev-dependencies]
 # criterion = "^0.3.4"
 criterion = { version = "^0.3.4", features = ["async_tokio"] }
