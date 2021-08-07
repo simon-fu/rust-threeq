@@ -1,6 +1,8 @@
 use clap::Clap;
 use rust_threeq::tq3;
 use std::fmt::Debug;
+
+mod common;
 mod mqtt;
 mod pulsar;
 
