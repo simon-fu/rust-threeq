@@ -105,6 +105,6 @@
     rest_pubs: {
         qps: 10
         padding_to_size: 256
-        packets: 1000000
+        packets: 1
     }
 }
