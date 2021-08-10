@@ -196,7 +196,6 @@ impl common::Puber for Puber {
         if let Some(pulsar) = self.pulsar.take() {
             self.producer.take().unwrap();
             drop(pulsar);
-            debug!("disconnect");
         }
         Ok(())
     }
@@ -247,7 +246,6 @@ impl common::Suber for Suber {
         if let Some(pulsar) = self.pulsar.take() {
             self.consumer.take().unwrap();
             drop(pulsar);
-            debug!("disconnect");
         }
         Ok(())
     }
