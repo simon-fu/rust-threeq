@@ -660,7 +660,7 @@ impl SessionGroups {
 }
 
 #[derive(Debug)]
-pub struct Launcher {
+pub struct PubsubBencher {
     req_tx: ReqSender,
     req_rx: ReqRecver,
     pubs: SessionGroups,
@@ -668,7 +668,7 @@ pub struct Launcher {
     is_pub_packets: bool,
 }
 
-impl Launcher {
+impl PubsubBencher {
     pub fn new() -> Self {
         let (req_tx, req_rx) = watch::channel(TaskReq::Ready);
         Self {

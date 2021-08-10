@@ -198,12 +198,12 @@ impl common::Puber for RestPuber {
 pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
     let mut accounts = app::AccountIter::new(&cfgw.env().accounts);
 
-    let mut launcher = common::Launcher::new();
+    let mut bencher = common::PubsubBencher::new();
     let mut sub_id = 0u64;
     let mut pub_id = 0u64;
 
     if cfgw.raw().subs.connections > 0 {
-        let _r = launcher
+        let _r = bencher
             .launch_sub_sessions(
                 "subs".to_string(),
                 &mut sub_id,
@@ -230,7 +230,7 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
             content: Bytes::copy_from_slice(cfgw.raw().pubs.content.as_bytes()),
         });
 
-        let _r = launcher
+        let _r = bencher
             .launch_pub_sessions(
                 "pubs".to_string(),
                 &mut pub_id,
@@ -258,7 +258,7 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
             content: Bytes::new(),
         });
 
-        let _r = launcher
+        let _r = bencher
             .launch_pub_sessions("rests".to_string(), &mut pub_id, 1, 1, args, |_n| {
                 RestPuber { cfg: cfgw.clone() }
             })
@@ -266,7 +266,7 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
     }
 
     let cfg = cfgw.raw();
-    launcher.kick_and_wait(cfg.recv_timeout_ms).await?;
+    bencher.kick_and_wait(cfg.recv_timeout_ms).await?;
 
     Ok(())
 }
