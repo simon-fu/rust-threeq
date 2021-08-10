@@ -14,7 +14,7 @@ use pulsar::{
 };
 use pulsar::{ConsumerOptions, Producer};
 // use serde::{Deserialize, Serialize};
-use tracing::{debug, error, trace};
+use tracing::{error, trace};
 
 // #[derive(Serialize, Deserialize)]
 // struct TestData {
