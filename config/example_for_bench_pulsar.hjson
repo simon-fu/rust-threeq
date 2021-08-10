@@ -1,0 +1,27 @@
+{
+    envs: {
+            local: {
+                address: pulsar://127.0.0.1:6650
+            }
+    }
+    env: local
+
+    recv_timeout_ms: 6000
+
+    pubs: {
+        connections: 1
+        conn_per_sec: 100
+        topic: non-persistent://public/default/t1
+        qps: 5
+        packets: 30
+        padding_to_size: 256
+        content: "abcdefg",
+        
+    }
+    subs: {
+        connections: 2
+        conn_per_sec: 100
+        topic: non-persistent://public/default/t1
+    }
+}
+

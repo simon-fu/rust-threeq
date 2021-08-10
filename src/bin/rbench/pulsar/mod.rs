@@ -1,8 +1,9 @@
-use clap::ArgEnum;
-use clap::Clap;
-
+mod config;
 mod entry_bench;
 mod entry_verify;
+
+use clap::ArgEnum;
+use clap::Clap;
 
 #[derive(Clap, Debug, PartialEq)]
 pub struct Args {

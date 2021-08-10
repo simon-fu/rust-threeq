@@ -1,3 +1,6 @@
+pub mod body;
+pub mod config;
+
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -14,7 +17,6 @@ use tokio::{
     time::{error::Elapsed, timeout},
 };
 use tracing::{debug, error, info, trace, warn};
-pub mod body;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
