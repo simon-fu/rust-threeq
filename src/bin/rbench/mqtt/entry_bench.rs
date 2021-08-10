@@ -199,8 +199,8 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
     let mut accounts = app::AccountIter::new(&cfgw.env().accounts);
 
     let mut launcher = common::Launcher::new();
-    let mut sub_id = 10u64;
-    let mut pub_id = 11u64;
+    let mut sub_id = 0u64;
+    let mut pub_id = 0u64;
 
     if cfgw.raw().subs.connections > 0 {
         let _r = launcher
