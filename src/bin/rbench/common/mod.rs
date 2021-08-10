@@ -469,8 +469,8 @@ impl SessionsResult {
 
     fn print_readys(&self) {
         debug!(
-            "{}: spawned tasks {}, connections {}",
-            self.name, self.num_tasks, self.num_readys
+            "{}: connections progress {}/{}",
+            self.name, self.num_readys, self.num_tasks,
         );
     }
 
@@ -550,7 +550,7 @@ impl SessionsResult {
                 self.recv_event(ev_rx).await?;
             }
             self.print_readys();
-            debug!("{}: all connections ready", self.name);
+            debug!("{}: setup connections {}", self.name, self.num_readys);
         }
         Ok(())
     }

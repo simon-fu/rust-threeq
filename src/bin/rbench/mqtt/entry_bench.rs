@@ -1,12 +1,14 @@
 // reqwest=info,hyper=info
 
+use crate::common::config::make_pubsub_topics;
+
 use super::super::common;
 use super::config as app;
 use async_trait::async_trait;
 use bytes::Bytes;
 use rust_threeq::tq3::tt;
 use std::sync::Arc;
-use tracing::{error, trace};
+use tracing::{error, info, trace};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -29,6 +31,7 @@ impl From<reqwest::Error> for common::Error {
 struct Suber {
     cfg: Arc<app::Config>,
     acc: app::Account,
+    topic: String,
     sender: Option<tt::client::Sender>,
     recver: Option<tt::client::Receiver>,
 }
@@ -51,7 +54,7 @@ impl common::Suber for Suber {
         }
 
         let ack = sender
-            .subscribe(tt::Subscribe::new(&cfgw.sub_topic(), cfg.subs.qos))
+            .subscribe(tt::Subscribe::new(&self.topic, cfg.subs.qos))
             .await?;
         for reason in &ack.return_codes {
             if !reason.is_success() {
@@ -94,6 +97,7 @@ impl common::Suber for Suber {
 struct Puber {
     cfg: Arc<app::Config>,
     acc: app::Account,
+    topic: String,
     sender: Option<tt::client::Sender>,
     recver: Option<tt::client::Receiver>,
 }
@@ -129,7 +133,7 @@ impl common::Puber for Puber {
     }
 
     async fn send(&mut self, data: Bytes) -> Result<(), common::Error> {
-        let mut pkt = tt::Publish::new(self.cfg.pub_topic(), self.cfg.raw().pubs.qos, []);
+        let mut pkt = tt::Publish::new(&self.topic, self.cfg.raw().pubs.qos, []);
         pkt.payload = data;
         let _r = self.sender.as_mut().unwrap().publish(pkt).await?;
         Ok(())
@@ -202,18 +206,28 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
     let mut sub_id = 0u64;
     let mut pub_id = 0u64;
 
-    if cfgw.raw().subs.connections > 0 {
+    let (mut pub_topics, mut sub_topics, desc) = make_pubsub_topics(
+        cfgw.raw().pubs.connections,
+        &cfgw.raw().pubs.topic,
+        cfgw.raw().subs.connections,
+        &cfgw.raw().subs.topic,
+    );
+
+    info!("topic rule: {}", desc);
+
+    if sub_topics.len() > 0 {
         let _r = bencher
             .launch_sub_sessions(
                 "subs".to_string(),
                 &mut sub_id,
-                cfgw.raw().subs.connections,
+                sub_topics.len() as u64,
                 cfgw.raw().subs.conn_per_sec,
                 |_n| {
                     let acc = accounts.next().unwrap();
                     Suber {
                         cfg: cfgw.clone(),
                         acc,
+                        topic: sub_topics.pop().unwrap(),
                         sender: None,
                         recver: None,
                     }
@@ -222,7 +236,7 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
             .await?;
     }
 
-    if cfgw.raw().pubs.connections > 0 {
+    if pub_topics.len() > 0 {
         let args = Arc::new(common::PubArgs {
             qps: cfgw.raw().pubs.qps,
             packets: cfgw.raw().pubs.packets,
@@ -234,7 +248,7 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
             .launch_pub_sessions(
                 "pubs".to_string(),
                 &mut pub_id,
-                cfgw.raw().pubs.connections,
+                pub_topics.len() as u64,
                 cfgw.raw().pubs.conn_per_sec,
                 args,
                 |_n| {
@@ -242,6 +256,7 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
                     Puber {
                         cfg: cfgw.clone(),
                         acc,
+                        topic: pub_topics.pop().unwrap(),
                         sender: None,
                         recver: None,
                     }

@@ -21,6 +21,13 @@
 
         - if publish with random topic
             - set pubs.topic with random str, for example t1/t2/$R{8}
+        
+        - pub-sub topics rule
+            - suppose that pub connecitons is P 
+            - suppose that sub connecitons is S 
+            - if pub topic is $R{} and sub topic is -, there are P groups for 1:S subscriptions
+            - if pub topic is - and sub topic is $R{}, there are S groups for P:1 subscriptions
+            - otherwise pub and sub independently
     */
 
     envs: {

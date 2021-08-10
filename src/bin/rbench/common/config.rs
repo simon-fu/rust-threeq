@@ -104,6 +104,10 @@ impl<'t> VarStr {
     //     }
     // }
 
+    pub fn is_dyn(&self) -> bool {
+        self.vars.len() > 0
+    }
+
     pub fn nvars(&self) -> usize {
         self.vars.len()
     }
@@ -151,4 +155,49 @@ impl<'t> VarStr {
     //         }
     //     });
     // }
+}
+
+pub fn make_pubsub_topics(
+    pub_n: u64,
+    pub_topic: &str,
+    sub_n: u64,
+    sub_topic: &str,
+) -> (Vec<String>, Vec<String>, String) {
+    let pubv = VarStr::new(pub_topic);
+    let subv = VarStr::new(sub_topic);
+
+    let mut pub_topics: Vec<String> = Vec::new();
+    let mut sub_topics: Vec<String> = Vec::new();
+
+    if pubv.is_dyn() && sub_topic == "-" {
+        for _ in 0..pub_n {
+            let t = pubv.random();
+            pub_topics.push(t.clone());
+            for _ in 0..sub_n {
+                sub_topics.push(t.clone());
+            }
+        }
+        (pub_topics, sub_topics, "subs-follow-pubs".to_string())
+    } else if subv.is_dyn() && pub_topic == "-" {
+        for _ in 0..sub_n {
+            let t = subv.random();
+            sub_topics.push(t.clone());
+            for _ in 0..pub_n {
+                pub_topics.push(t.clone());
+            }
+        }
+        (pub_topics, sub_topics, "pubs-follow-subs".to_string())
+    } else {
+        for _ in 0..pub_n {
+            pub_topics.push(pubv.random());
+        }
+        for _ in 0..sub_n {
+            sub_topics.push(subv.random());
+        }
+        (
+            pub_topics,
+            sub_topics,
+            "pubs-subs-independently".to_string(),
+        )
+    }
 }
