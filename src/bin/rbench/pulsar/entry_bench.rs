@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use super::config::Config;
 use crate::common;
+use crate::common::config::make_pubsub_topics;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
@@ -14,7 +15,7 @@ use pulsar::{
 };
 use pulsar::{ConsumerOptions, Producer};
 // use serde::{Deserialize, Serialize};
-use tracing::{error, trace};
+use tracing::{error, info, trace};
 
 // #[derive(Serialize, Deserialize)]
 // struct TestData {
@@ -164,6 +165,7 @@ impl DeserializeMessage for Data {
 
 struct Puber {
     cfg: Arc<Config>,
+    topic: String,
     pulsar: Option<Pulsar<TokioExecutor>>,
     producer: Option<Producer<TokioExecutor>>,
 }
@@ -176,7 +178,7 @@ impl common::Puber for Puber {
             .await?;
         let producer = pulsar
             .producer()
-            .with_topic(self.cfg.pub_topic())
+            .with_topic(&self.topic)
             // .with_name("my producer")
             .with_options(producer::ProducerOptions {
                 schema: Some(proto::Schema {
@@ -212,6 +214,7 @@ impl common::Puber for Puber {
 
 struct Suber {
     cfg: Arc<Config>,
+    topic: String,
     pulsar: Option<Pulsar<TokioExecutor>>,
     consumer: Option<Consumer<Data, TokioExecutor>>,
 }
@@ -231,7 +234,7 @@ impl common::Suber for Suber {
                 }),
                 ..Default::default()
             })
-            .with_topic(self.cfg.sub_topic())
+            .with_topic(&self.topic)
             // .with_consumer_name("test_consumer")
             .with_subscription_type(SubType::Shared)
             // .with_subscription("test_subscription")
@@ -263,15 +266,24 @@ pub async fn bench_all(cfgw: Arc<Config>) -> Result<(), common::Error> {
     let mut sub_id = 0u64;
     let mut pub_id = 0u64;
 
-    if cfgw.raw().subs.connections > 0 {
+    let (mut pub_topics, mut sub_topics, desc) = make_pubsub_topics(
+        cfgw.raw().pubs.connections,
+        &cfgw.raw().pubs.topic,
+        cfgw.raw().subs.connections,
+        &cfgw.raw().subs.topic,
+    );
+    info!("topic rule: {}", desc);
+
+    if sub_topics.len() > 0 {
         let _r = bencher
             .launch_sub_sessions(
                 "subs".to_string(),
                 &mut sub_id,
-                cfgw.raw().subs.connections,
+                sub_topics.len() as u64,
                 cfgw.raw().subs.conn_per_sec,
                 |_n| Suber {
                     cfg: cfgw.clone(),
+                    topic: sub_topics.pop().unwrap(),
                     pulsar: None,
                     consumer: None,
                 },
@@ -279,7 +291,7 @@ pub async fn bench_all(cfgw: Arc<Config>) -> Result<(), common::Error> {
             .await?;
     }
 
-    if cfgw.raw().pubs.connections > 0 {
+    if pub_topics.len() > 0 {
         let args = Arc::new(common::PubArgs {
             qps: cfgw.raw().pubs.qps,
             packets: cfgw.raw().pubs.packets,
@@ -291,11 +303,12 @@ pub async fn bench_all(cfgw: Arc<Config>) -> Result<(), common::Error> {
             .launch_pub_sessions(
                 "pubs".to_string(),
                 &mut pub_id,
-                cfgw.raw().pubs.connections,
+                pub_topics.len() as u64,
                 cfgw.raw().pubs.conn_per_sec,
                 args,
                 |_n| Puber {
                     cfg: cfgw.clone(),
+                    topic: pub_topics.pop().unwrap(),
                     pulsar: None,
                     producer: None,
                 },

@@ -11,7 +11,7 @@ pub struct Environment {
 pub struct PubArgs {
     pub connections: u64,
     pub conn_per_sec: u64,
-    topic: String,
+    pub topic: String,
     pub qps: u64,
     pub padding_to_size: usize,
     pub packets: u64,
@@ -38,7 +38,7 @@ impl PubArgs {
 pub struct SubArgs {
     pub connections: u64,
     pub conn_per_sec: u64,
-    topic: String,
+    pub topic: String,
 }
 
 impl SubArgs {
@@ -69,8 +69,8 @@ pub struct Config0 {
 #[derive(Debug, Default)]
 pub struct Config {
     cfg0: Config0,
-    sub_topic_maker: VarStr,
-    pub_topic_maker: VarStr,
+    // sub_topic_maker: VarStr,
+    // pub_topic_maker: VarStr,
     env: Option<Environment>,
 }
 
@@ -80,8 +80,8 @@ impl Config {
         c.merge(config::File::with_name(fname)).unwrap();
         let cfg0: Config0 = c.try_into().unwrap();
         let mut self0 = Config {
-            sub_topic_maker: VarStr::new(&cfg0.subs.topic),
-            pub_topic_maker: VarStr::new(&cfg0.pubs.topic),
+            // sub_topic_maker: VarStr::new(&cfg0.subs.topic),
+            // pub_topic_maker: VarStr::new(&cfg0.pubs.topic),
             cfg0,
             env: None,
         };
@@ -103,11 +103,11 @@ impl Config {
         &self.cfg0
     }
 
-    pub fn pub_topic(&self) -> String {
-        self.pub_topic_maker.random()
-    }
+    // pub fn pub_topic(&self) -> String {
+    //     self.pub_topic_maker.random()
+    // }
 
-    pub fn sub_topic(&self) -> String {
-        self.sub_topic_maker.random()
-    }
+    // pub fn sub_topic(&self) -> String {
+    //     self.sub_topic_maker.random()
+    // }
 }

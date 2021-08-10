@@ -19,7 +19,7 @@
         
     }
     subs: {
-        connections: 2
+        connections: 1
         conn_per_sec: 100
         topic: non-persistent://public/default/t1
     }
