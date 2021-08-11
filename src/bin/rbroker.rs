@@ -11,10 +11,15 @@ TODO:
 - support local disk storage
 */
 
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use bytes::{Bytes, BytesMut};
 use clap::Clap;
+use hub::BcSenders;
 use rust_threeq::tq3::{self, tt};
 use std::convert::TryFrom;
 use tokio::{
@@ -156,54 +161,88 @@ mod hub {
     }
 
     type BcSender = tokio::sync::broadcast::Sender<Arc<BcData>>;
+    // type BcSenders = Arc<RwLock<HashMap<u64, BcSender>>>;
+
+    #[derive(Default, Debug)]
+    pub struct BcSenders {
+        map: RwLock<HashMap<u64, BcSender>>,
+    }
+
+    impl BcSenders {
+        #[inline(always)]
+        pub async fn insert(&self, uid: u64, tx: BcSender) -> usize {
+            let mut senders = self.map.write().await;
+            senders.insert(uid, tx);
+            senders.len()
+        }
+
+        #[inline(always)]
+        pub async fn remove(&self, uid: &u64) -> usize {
+            let mut senders = self.map.write().await;
+            senders.remove(&uid);
+            senders.len()
+        }
+
+        #[inline(always)]
+        pub async fn broadcast(&self, d: Arc<BcData>) {
+            let senders = self.map.read().await;
+            for (_, tx) in senders.iter() {
+                let _ = tx.send(d.clone());
+            }
+        }
+    }
 
     #[derive(Default, Debug)]
     pub struct Hub {
         // topic_filter -> senders
-        subscriptions: RwLock<HashMap<String, HashMap<u64, BcSender>>>,
+        subscriptions: RwLock<HashMap<String, Arc<BcSenders>>>,
     }
 
     impl Hub {
-        pub async fn subscribe(&self, topic_filter: &str, uid: u64, tx: BcSender) {
+        #[inline(always)]
+        async fn get_or_add_senders(&self, topic_filter: &str) -> Arc<BcSenders> {
             let mut map = self.subscriptions.write().await;
             if !map.contains_key(topic_filter) {
-                map.insert(topic_filter.to_string(), HashMap::new());
+                map.insert(topic_filter.to_string(), Default::default());
             }
-            let senders = map.get_mut(topic_filter).unwrap();
-            senders.insert(uid, tx);
+            map.get_mut(topic_filter).unwrap().clone()
+        }
+
+        #[inline(always)]
+        pub async fn subscribe(&self, topic_filter: &str, uid: u64, tx: BcSender) {
+            let senders = self.get_or_add_senders(topic_filter).await;
+            let num = senders.insert(uid, tx).await;
             debug!(
                 "subscribe filter {}, uid {}, num {}",
-                topic_filter,
-                uid,
-                senders.len()
+                topic_filter, uid, num
             );
         }
 
+        #[inline(always)]
         pub async fn unsubscribe(&self, topic_filter: &str, uid: u64) {
             let mut map = self.subscriptions.write().await;
             if let Some(senders) = map.get_mut(topic_filter) {
-                senders.remove(&uid);
+                let num = senders.remove(&uid).await;
                 debug!(
                     "unsubscribe filter {}, uid {}, num {}",
-                    topic_filter,
-                    uid,
-                    senders.len()
+                    topic_filter, uid, num
                 );
-                if senders.is_empty() {
+                if num == 0 {
+                    drop(senders);
                     map.remove(topic_filter);
                 }
             }
         }
 
-        pub async fn publish(&self, filter: &str, d: Arc<BcData>) {
+        #[inline(always)]
+        pub async fn publish(&self, filter: &str, d: Arc<BcData>) -> Option<Arc<BcSenders>> {
             let map = self.subscriptions.read().await;
             match map.get(filter) {
                 Some(senders) => {
-                    for (_, tx) in senders.iter() {
-                        let _ = tx.send(d.clone());
-                    }
+                    senders.broadcast(d).await;
+                    Some(senders.clone())
                 }
-                None => {}
+                None => None,
             }
         }
     }
@@ -221,6 +260,8 @@ struct Session {
     rx: broadcast::Receiver<Arc<hub::BcData>>,
     disconnected: bool,
     topic_filters: HashSet<String>,
+    last_pub_senders: Weak<BcSenders>,
+    last_pub_topic: String,
 }
 
 impl Session {
@@ -239,6 +280,8 @@ impl Session {
             rx,
             disconnected: false,
             topic_filters: HashSet::new(),
+            last_pub_senders: Weak::new(),
+            last_pub_topic: "".to_string(),
         }
     }
 
@@ -373,9 +416,25 @@ impl Session {
             }
             tt::QoS::ExactlyOnce => {}
         }
-        self.hub
+
+        if packet.topic == self.last_pub_topic {
+            if let Some(senders) = self.last_pub_senders.upgrade() {
+                senders
+                    .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
+                    .await;
+                return Ok(());
+            }
+        }
+
+        let senders = self
+            .hub
             .publish(&packet.topic, Arc::new(hub::BcData::PUB(packet.clone())))
             .await;
+
+        if let Some(senders) = senders {
+            self.last_pub_senders = Arc::downgrade(&senders);
+            self.last_pub_topic = packet.topic.clone();
+        }
 
         Ok(())
     }
