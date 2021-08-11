@@ -380,10 +380,15 @@ impl Session {
         Ok(())
     }
 
-    // async fn handle_puback(&mut self, fixed_header: tt::FixedHeader, bytes: Bytes, obuf : &mut BytesMut) -> AppResult<()> {
-    //     let pkt = tt::PubAck::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
-    //     Ok(())
-    // }
+    async fn handle_puback(
+        &mut self,
+        fixed_header: tt::FixedHeader,
+        bytes: Bytes,
+        _obuf: &mut BytesMut,
+    ) -> AppResult<()> {
+        let _pkt = tt::PubAck::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
+        Ok(())
+    }
 
     // async fn handle_pubrec(&mut self, fixed_header: tt::FixedHeader, bytes: Bytes, obuf : &mut BytesMut) -> AppResult<()> {
     //     let pkt = tt::PubRec::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
@@ -494,7 +499,9 @@ impl Session {
                         tt::PacketType::Publish => {
                             self.handle_publish(h, bytes, obuf).await?;
                         }
-                        // tt::PacketType::PubAck      => {self.handle_puback(h, bytes, obuf).await?;},
+                        tt::PacketType::PubAck => {
+                            self.handle_puback(h, bytes, obuf).await?;
+                        }
                         // tt::PacketType::PubRec      => {self.handle_pubrec(h, bytes, obuf).await?;},
                         // tt::PacketType::PubRel      => {self.handle_pubrel(h, bytes, obuf).await?;},
                         // tt::PacketType::PubComp     => {self.handle_pubcomp(h, bytes, obuf).await?;},

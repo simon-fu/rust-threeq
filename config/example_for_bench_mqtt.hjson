@@ -75,7 +75,7 @@
         keep_alive_secs: 30
         topic: t1/t2
         qos: QoS1
-        qps: 10000
+        qps: 10
         
         // Add padding when packet size small than this value, 
         // Default is 0.
