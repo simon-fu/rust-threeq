@@ -164,19 +164,16 @@ impl DeserializeMessage for Data {
 }
 
 struct Puber {
-    cfg: Arc<Config>,
     topic: String,
-    pulsar: Option<Pulsar<TokioExecutor>>,
+    pulsar: Pulsar<TokioExecutor>,
     producer: Option<Producer<TokioExecutor>>,
 }
 
 #[async_trait]
 impl common::Puber for Puber {
     async fn connect(&mut self) -> Result<(), common::Error> {
-        let pulsar: Pulsar<_> = Pulsar::builder(&self.cfg.env().address, TokioExecutor)
-            .build()
-            .await?;
-        let producer = pulsar
+        let producer = self
+            .pulsar
             .producer()
             .with_topic(&self.topic)
             // .with_name("my producer")
@@ -190,21 +187,20 @@ impl common::Puber for Puber {
             .build()
             .await?;
         self.producer = Some(producer);
-        self.pulsar = Some(pulsar);
+        // self.pulsar = Some(pulsar);
         Ok(())
     }
 
     async fn disconnect(&mut self) -> Result<(), common::Error> {
-        if let Some(pulsar) = self.pulsar.take() {
-            self.producer.take().unwrap();
-            drop(pulsar);
+        if let Some(producer) = self.producer.take() {
+            drop(producer);
         }
         Ok(())
     }
 
     async fn send(&mut self, data: Bytes) -> Result<(), common::Error> {
         let r = self.producer.as_mut().unwrap().send(Data(data)).await?;
-        let r = r.await?;
+        let _r = r.await?;
         Ok(())
     }
 
@@ -214,19 +210,17 @@ impl common::Puber for Puber {
 }
 
 struct Suber {
-    cfg: Arc<Config>,
+    id: u64,
     topic: String,
-    pulsar: Option<Pulsar<TokioExecutor>>,
+    pulsar: Pulsar<TokioExecutor>,
     consumer: Option<Consumer<Data, TokioExecutor>>,
 }
 
 #[async_trait]
 impl common::Suber for Suber {
     async fn connect(&mut self) -> Result<(), common::Error> {
-        let pulsar: Pulsar<_> = Pulsar::builder(&self.cfg.env().address, TokioExecutor)
-            .build()
-            .await?;
-        let consumer: Consumer<Data, _> = pulsar
+        let consumer: Consumer<Data, _> = self
+            .pulsar
             .consumer()
             .with_options(ConsumerOptions {
                 schema: Some(proto::Schema {
@@ -237,19 +231,18 @@ impl common::Suber for Suber {
             })
             .with_topic(&self.topic)
             // .with_consumer_name("test_consumer")
-            .with_subscription_type(SubType::Shared)
-            // .with_subscription("test_subscription")
+            .with_subscription_type(SubType::Exclusive)
+            .with_subscription(format!("sub-{}", self.id))
             .build()
             .await?;
         self.consumer = Some(consumer);
-        self.pulsar = Some(pulsar);
+        // self.pulsar = Some(pulsar);
         Ok(())
     }
 
     async fn disconnect(&mut self) -> Result<(), common::Error> {
-        if let Some(pulsar) = self.pulsar.take() {
-            self.consumer.take().unwrap();
-            drop(pulsar);
+        if let Some(consumer) = self.consumer.take() {
+            drop(consumer);
         }
         Ok(())
     }
@@ -275,6 +268,10 @@ pub async fn bench_all(cfgw: Arc<Config>) -> Result<(), common::Error> {
     );
     info!("topic rule: {}", desc);
 
+    let pulsar: Pulsar<_> = Pulsar::builder(&cfgw.env().address, TokioExecutor)
+        .build()
+        .await?;
+
     if sub_topics.len() > 0 {
         let _r = bencher
             .launch_sub_sessions(
@@ -282,10 +279,10 @@ pub async fn bench_all(cfgw: Arc<Config>) -> Result<(), common::Error> {
                 &mut sub_id,
                 sub_topics.len() as u64,
                 cfgw.raw().subs.conn_per_sec,
-                |_n| Suber {
-                    cfg: cfgw.clone(),
+                |n| Suber {
+                    id: n,
                     topic: sub_topics.pop().unwrap(),
-                    pulsar: None,
+                    pulsar: pulsar.clone(),
                     consumer: None,
                 },
             )
@@ -308,9 +305,8 @@ pub async fn bench_all(cfgw: Arc<Config>) -> Result<(), common::Error> {
                 cfgw.raw().pubs.conn_per_sec,
                 args,
                 |_n| Puber {
-                    cfg: cfgw.clone(),
                     topic: pub_topics.pop().unwrap(),
-                    pulsar: None,
+                    pulsar: pulsar.clone(),
                     producer: None,
                 },
             )
