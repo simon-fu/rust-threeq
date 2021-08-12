@@ -185,7 +185,7 @@ type EVRecver = mpsc::Receiver<TaskEvent>;
 type ReqSender = watch::Sender<TaskReq>;
 type ReqRecver = watch::Receiver<TaskReq>;
 
-const MAX_PUBS: usize = 10000;
+const MAX_PUBS: usize = 1_000_000_000;
 
 #[derive(Debug, Default, Clone, Copy)]
 struct PuberItem {
