@@ -203,7 +203,8 @@ impl common::Puber for Puber {
     }
 
     async fn send(&mut self, data: Bytes) -> Result<(), common::Error> {
-        self.producer.as_mut().unwrap().send(Data(data)).await?;
+        let r = self.producer.as_mut().unwrap().send(Data(data)).await?;
+        let r = r.await?;
         Ok(())
     }
 
