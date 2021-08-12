@@ -313,8 +313,12 @@ pub async fn bench_all(cfgw: Arc<Config>) -> Result<(), common::Error> {
             .await?;
     }
 
-    let cfg = cfgw.raw();
-    bencher.kick_and_wait(cfg.recv_timeout_ms).await?;
+    if pub_id > 0 {
+        info!("press Enter to continue...");
+        let _ = std::io::Read::read(&mut std::io::stdin(), &mut [0u8]).unwrap();
+    }
+
+    bencher.kick_and_wait(cfgw.raw().recv_timeout_ms).await?;
 
     Ok(())
 }
