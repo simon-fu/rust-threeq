@@ -253,13 +253,15 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
                 args,
                 |_n| {
                     let acc = accounts.next().unwrap();
-                    Puber {
+                    let item = pub_topics.pop().unwrap();
+                    let o = Puber {
                         cfg: cfgw.clone(),
                         acc,
-                        topic: pub_topics.pop().unwrap(),
+                        topic: item.1,
                         sender: None,
                         recver: None,
-                    }
+                    };
+                    (item.0, o)
                 },
             )
             .await?;
@@ -274,8 +276,9 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
         });
 
         let _r = bencher
-            .launch_pub_sessions("rests".to_string(), &mut pub_id, 1, 1, args, |_n| {
-                RestPuber { cfg: cfgw.clone() }
+            .launch_pub_sessions("rests".to_string(), &mut pub_id, 1, 1, args, |n| {
+                let o = RestPuber { cfg: cfgw.clone() };
+                (n, o)
             })
             .await?;
     }

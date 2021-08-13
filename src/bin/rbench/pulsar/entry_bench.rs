@@ -304,10 +304,14 @@ pub async fn bench_all(cfgw: Arc<Config>) -> Result<(), common::Error> {
                 pub_topics.len() as u64,
                 cfgw.raw().pubs.conn_per_sec,
                 args,
-                |_n| Puber {
-                    topic: pub_topics.pop().unwrap(),
-                    pulsar: pulsar.clone(),
-                    producer: None,
+                |_n| {
+                    let item = pub_topics.pop().unwrap();
+                    let o = Puber {
+                        topic: item.1,
+                        pulsar: pulsar.clone(),
+                        producer: None,
+                    };
+                    (item.0, o)
                 },
             )
             .await?;

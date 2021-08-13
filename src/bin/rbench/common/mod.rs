@@ -254,10 +254,22 @@ impl Checker {
     }
 
     pub fn check_lost(&mut self) {
-        for v in &self.items {
+        let mut num_nothing = 0usize;
+        for (idx, v) in self.items.iter().enumerate() {
+            // debug!("puber[{}]: {:?}", idx, v);
             if v.next_seq < v.max_seq {
-                self.stati.lost += v.max_seq - v.next_seq;
+                let lost = v.max_seq - v.next_seq;
+                self.stati.lost += lost;
+                debug!(
+                    "puber[{}] next {}, max {}, lost {}",
+                    idx, v.next_seq, v.max_seq, lost
+                );
+            } else if v.next_seq == 0 && v.max_seq == 0 {
+                num_nothing += 1;
             }
+        }
+        if num_nothing > 0 {
+            debug!("recv nothings {}/{}", num_nothing, self.items.len());
         }
     }
 
@@ -326,6 +338,7 @@ impl<T: Suber + Send> SubSession<T> {
 
             let header = body::Header::decode(&mut data);
             let latency = checker.input_and_check(TS::now_ms(), &header)?;
+            trace!("recv packet {:?}", header);
 
             let _r = self
                 .tx
@@ -359,16 +372,25 @@ pub struct PubArgs {
 pub struct PubSession<T: Puber + Send> {
     client: T,
     id: u64,
+    index: u64,
     tx: EVSender,
     rx: ReqRecver,
     args: Arc<PubArgs>,
 }
 
 impl<T: Puber + Send> PubSession<T> {
-    fn new(client: T, id: u64, tx: EVSender, rx: ReqRecver, args: Arc<PubArgs>) -> Self {
+    fn new(
+        client: T,
+        id: u64,
+        index: u64,
+        tx: EVSender,
+        rx: ReqRecver,
+        args: Arc<PubArgs>,
+    ) -> Self {
         Self {
             client,
             id,
+            index,
             tx,
             rx,
             args,
@@ -381,7 +403,7 @@ impl<T: Puber + Send> PubSession<T> {
         let _r = self.tx.send(TaskEvent::Ready(Instant::now())).await;
         let req = wait_for_req(&mut self.rx).await?;
 
-        let mut header = body::Header::new(self.id as usize);
+        let mut header = body::Header::new(self.index as usize);
         header.max_seq = self.args.packets;
 
         let mut pacer = tq3::limit::Pacer::new(self.args.qps);
@@ -394,13 +416,14 @@ impl<T: Puber + Send> PubSession<T> {
                 let start_time = Instant::now();
 
                 while header.seq < self.args.packets {
-                    trace!("send No.{} packet", header.seq);
-
                     if let Some(d) = pacer.get_sleep_duration(header.seq) {
                         tokio::time::sleep(d).await;
                     }
 
                     header.ts = TS::now_ms();
+
+                    trace!("send packet {:?}", header);
+
                     body::encode_binary(
                         &header,
                         &self.args.content,
@@ -725,7 +748,7 @@ impl PubsubBencher {
         mut factory: F,
     ) -> Result<(), Error>
     where
-        F: FnMut(u64) -> T,
+        F: FnMut(u64) -> (u64, T),
     {
         let mut sss = Sessions::new(name);
         sss.launch(
@@ -734,8 +757,8 @@ impl PubsubBencher {
             num_sessions,
             sessions_per_sec,
             |id, tx, rx| {
-                let client = factory(id);
-                let mut s0 = PubSession::new(client, id, tx, rx, args.clone());
+                let (index, client) = factory(id);
+                let mut s0 = PubSession::new(client, id, index, tx, rx, args.clone());
                 let f = async move {
                     let r = s0.task_entry().await;
                     if let Err(e) = r {
