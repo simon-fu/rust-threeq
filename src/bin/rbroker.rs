@@ -751,7 +751,7 @@ async fn async_main() -> std::io::Result<()> {
     });
 
     let actix_h = HttpServer::new(|| App::new().service(metrics))
-        // .workers(8)
+        .workers(1)
         .bind("127.0.0.1:8080")
         .expect("Couldn't bind to 127.0.0.1:8080")
         .run();
