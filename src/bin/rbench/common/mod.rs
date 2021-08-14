@@ -881,7 +881,7 @@ impl PubsubBencher {
                 } else {
                     warn!("{}: lost packets {}", results.name, results.stati.lost);
                 }
-                
+
                 tq3::histogram::print_duration(
                     &format!("{} Latency", results.name),
                     &results.latencyh,

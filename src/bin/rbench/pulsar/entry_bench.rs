@@ -219,7 +219,11 @@ struct Suber {
 #[async_trait]
 impl common::Suber for Suber {
     async fn connect(&mut self) -> Result<(), common::Error> {
-        let name = format!("{}-sub-{}", machine_uid::get().unwrap(), self.id);
+        let name = format!(
+            "{}-sub-{}",
+            mac_address::get_mac_address().unwrap().unwrap(),
+            self.id
+        );
         let consumer: Consumer<Data, _> = self
             .pulsar
             .consumer()
@@ -337,7 +341,8 @@ pub async fn run(config_file: &str) {
     let cfg = Config::load_from_file(&config_file);
     let cfg = Arc::new(cfg);
     trace!("cfg=[{:#?}]", cfg.raw());
-    info!("machine_uid = [{}]", machine_uid::get().unwrap());
+    let addr = mac_address::get_mac_address().unwrap().unwrap();
+    info!("machine_uid = [{}]", addr);
 
     match bench_all(cfg.clone()).await {
         Ok(_) => {}
