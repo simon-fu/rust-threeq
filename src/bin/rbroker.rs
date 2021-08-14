@@ -735,15 +735,13 @@ async fn metrics() -> impl Responder {
     HttpResponse::Ok().body(output)
 }
 
-// #[tokio::main]
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
+async fn async_main() -> std::io::Result<()> {
     tq3::log::tracing_subscriber::init();
 
     let cfg = Config::parse();
     info!("cfg={:?}", cfg);
 
-    tokio::spawn(async move {
+    let tokio_h = tokio::spawn(async move {
         match run_server(&cfg).await {
             Ok(_) => {}
             Err(e) => {
@@ -752,8 +750,32 @@ async fn main() -> std::io::Result<()> {
         }
     });
 
-    HttpServer::new(|| App::new().service(metrics))
-        .bind("127.0.0.1:8080")?
-        .run()
-        .await
+    let actix_h = HttpServer::new(|| App::new().service(metrics))
+        // .workers(8)
+        .bind("127.0.0.1:8080")
+        .expect("Couldn't bind to 127.0.0.1:8080")
+        .run();
+
+    match futures::future::select(tokio_h, actix_h).await {
+        futures::future::Either::Left(_r) => {}
+        futures::future::Either::Right(_r) => {}
+    }
+
+    Ok(())
+}
+
+// #[tokio::main]
+// #[actix_web::main]
+fn main() -> std::io::Result<()> {
+    actix_web::rt::System::with_tokio_rt(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            // .worker_threads(8)
+            .thread_name("main-tokio")
+            .build()
+            .unwrap()
+    })
+    .block_on(async_main())?;
+
+    Ok(())
 }
