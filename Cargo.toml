@@ -66,6 +66,7 @@ pulsar = { version = "^4.0.0", default-features = false, features = ["tokio-runt
 # specifying an exact version for pulsar, in case of building fail with nom 7.0.0-alpha2
 nom = { version="=7.0.0-alpha1", default-features=false, features=["alloc"] }
 
+machine-uid = "0.2.0"
 
 [dev-dependencies]
 # criterion = "^0.3.4"

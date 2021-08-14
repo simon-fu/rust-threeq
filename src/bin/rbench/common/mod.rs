@@ -229,6 +229,7 @@ impl Checker {
                 *next_seq, header.seq
             )));
         } else if header.seq > *next_seq {
+            debug!("detect lost, expect seq {}, but {:?}", *next_seq, header);
             self.stati.lost += header.seq - *next_seq;
         }
 
@@ -256,12 +257,12 @@ impl Checker {
     pub fn check_lost(&mut self) {
         let mut num_nothing = 0usize;
         for (idx, v) in self.items.iter().enumerate() {
-            // debug!("puber[{}]: {:?}", idx, v);
+            // debug!("check_lost: puber[{}]: {:?}", idx, v);
             if v.next_seq < v.max_seq {
                 let lost = v.max_seq - v.next_seq;
                 self.stati.lost += lost;
                 debug!(
-                    "puber[{}] next {}, max {}, lost {}",
+                    "check_lost: puber[{}] next {}, max {}, lost {}",
                     idx, v.next_seq, v.max_seq, lost
                 );
             } else if v.next_seq == 0 && v.max_seq == 0 {
@@ -269,7 +270,15 @@ impl Checker {
             }
         }
         if num_nothing > 0 {
-            debug!("recv nothings {}/{}", num_nothing, self.items.len());
+            debug!(
+                "check_lost: recv nothings {}/{}",
+                num_nothing,
+                self.items.len()
+            );
+        }
+
+        if self.stati.lost > 0 {
+            debug!("check_lost: lost {}", self.stati.lost);
         }
     }
 
@@ -867,7 +876,12 @@ impl PubsubBencher {
         for sss in &self.subs.groups {
             if let Some(results) = &sss.results {
                 info!("{}: recv packets {}", results.name, results.stati.packets);
-                info!("{}: lost packets {}", results.name, results.stati.lost);
+                if results.stati.lost == 0 {
+                    info!("{}: lost packets {}", results.name, results.stati.lost);
+                } else {
+                    warn!("{}: lost packets {}", results.name, results.stati.lost);
+                }
+                
                 tq3::histogram::print_duration(
                     &format!("{} Latency", results.name),
                     &results.latencyh,
