@@ -293,8 +293,8 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
     Ok(())
 }
 
-pub async fn run(config_file: &str) {
-    let cfg = app::Config::load_from_file(&config_file);
+pub async fn run(args: &super::Args) {
+    let cfg = app::Config::load_from_file(&args.config_file);
     trace!("cfg=[{:#?}]", cfg.raw());
     let cfg = Arc::new(cfg);
 

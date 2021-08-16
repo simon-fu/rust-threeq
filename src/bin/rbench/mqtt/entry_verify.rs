@@ -1057,8 +1057,8 @@ async fn run0(cfg: Config) -> Result<(), Error> {
     Ok(())
 }
 
-pub async fn run(config_file: &str) {
-    let cfg = Config::load_from_file(config_file);
+pub async fn run(args: &super::Args) {
+    let cfg = Config::load_from_file(&args.config_file);
 
     debug!("cfg=[{:?}]", cfg);
     info!("-");

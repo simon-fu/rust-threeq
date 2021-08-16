@@ -1,1 +1,1 @@
-pub async fn run(_config_file: &str) {}
+pub async fn run(_args: &super::Args) {}

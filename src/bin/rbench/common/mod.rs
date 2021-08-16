@@ -640,8 +640,22 @@ impl Sessions {
         }
 
         let (ev_tx, mut ev_rx) = mpsc::channel(10240);
-        let pacer = tq3::limit::Pacer::new(sessions_per_sec);
+        let mut pacer = tq3::limit::Pacer::new(sessions_per_sec);
         while results.num_tasks < num_sessions {
+            {
+                let remains = results.num_tasks - results.num_readys;
+                if remains >= sessions_per_sec {
+                    debug!(
+                        "too slow, remains({}/{}, {}) >= rate({}) ",
+                        results.num_readys, results.num_tasks, remains, sessions_per_sec
+                    );
+                    while results.num_readys < results.num_tasks {
+                        results.recv_event(&mut ev_rx).await?;
+                    }
+                    pacer.kick(); // reset timer
+                }
+            }
+
             if let Some(d) = pacer.get_sleep_duration(results.num_tasks) {
                 if results.num_readys < results.num_tasks {
                     if results.try_recv_event(&mut ev_rx).await? {

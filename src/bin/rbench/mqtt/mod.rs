@@ -18,6 +18,9 @@ pub struct Args {
         default_value = "bench"
     )]
     sub_type: SubType,
+
+    #[clap(long = "node", long_about = "this node id", default_value = " ")]
+    node_id: String,
 }
 
 #[derive(ArgEnum, Debug, PartialEq)]
@@ -28,7 +31,7 @@ pub enum SubType {
 
 pub async fn run(args: &Args) {
     match args.sub_type {
-        SubType::Bench => entry_bench::run(&args.config_file).await,
-        SubType::Verify => entry_verify::run(&args.config_file).await,
+        SubType::Bench => entry_bench::run(args).await,
+        SubType::Verify => entry_verify::run(args).await,
     }
 }

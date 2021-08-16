@@ -210,7 +210,7 @@ impl common::Puber for Puber {
 }
 
 struct Suber {
-    id: u64,
+    id: String,
     topic: String,
     pulsar: Pulsar<TokioExecutor>,
     consumer: Option<Consumer<Data, TokioExecutor>>,
@@ -219,11 +219,8 @@ struct Suber {
 #[async_trait]
 impl common::Suber for Suber {
     async fn connect(&mut self) -> Result<(), common::Error> {
-        let name = format!(
-            "{}-sub-{}",
-            mac_address::get_mac_address().unwrap().unwrap(),
-            self.id
-        );
+        info!("my id {}", self.id);
+
         let consumer: Consumer<Data, _> = self
             .pulsar
             .consumer()
@@ -235,9 +232,9 @@ impl common::Suber for Suber {
                 ..Default::default()
             })
             .with_topic(&self.topic)
-            .with_consumer_name(name.clone())
+            .with_consumer_name(self.id.clone())
             .with_subscription_type(SubType::Exclusive)
-            .with_subscription(name)
+            .with_subscription(self.id.clone())
             .build()
             .await?;
         self.consumer = Some(consumer);
@@ -260,7 +257,7 @@ impl common::Suber for Suber {
     }
 }
 
-pub async fn bench_all(cfgw: Arc<Config>) -> Result<(), common::Error> {
+pub async fn bench_all(cfgw: Arc<Config>, node_id: String) -> Result<(), common::Error> {
     let mut bencher = common::PubsubBencher::new();
     let mut sub_id = 0u64;
     let mut pub_id = 0u64;
@@ -285,7 +282,7 @@ pub async fn bench_all(cfgw: Arc<Config>) -> Result<(), common::Error> {
                 sub_topics.len() as u64,
                 cfgw.raw().subs.conn_per_sec,
                 |n| Suber {
-                    id: n,
+                    id: format!("{}-sub-{}", node_id, n),
                     topic: sub_topics.pop().unwrap(),
                     pulsar: pulsar.clone(),
                     consumer: None,
@@ -332,19 +329,24 @@ pub async fn bench_all(cfgw: Arc<Config>) -> Result<(), common::Error> {
     Ok(())
 }
 
-pub async fn run(config_file: &str) {
+pub async fn run(args: &super::Args) {
     // let r = test().await;
     // if r.is_err() {
     //     error!("{:?}", r);
     // }
 
-    let cfg = Config::load_from_file(&config_file);
+    let cfg = Config::load_from_file(&args.config_file);
     let cfg = Arc::new(cfg);
     trace!("cfg=[{:#?}]", cfg.raw());
-    let addr = mac_address::get_mac_address().unwrap().unwrap();
-    info!("machine_uid = [{}]", addr);
 
-    match bench_all(cfg.clone()).await {
+    let node_id = if !args.node_id.is_empty() && args.node_id != " " {
+        args.node_id.clone()
+    } else {
+        mac_address::get_mac_address().unwrap().unwrap().to_string()
+    };
+    info!("node_id = [{}]", node_id);
+
+    match bench_all(cfg.clone(), node_id).await {
         Ok(_) => {}
         Err(e) => {
             error!("bench result error [{}]", e);
