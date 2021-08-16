@@ -160,8 +160,9 @@ mod hub {
         PUB(tt::Publish),
     }
 
-    // #[cfg(channel_type = "mpsc")]
-    #[cfg(not(channel_type = "mpsc"))]
+    // RUSTFLAGS='--cfg channel_type="broadcast"' cargo build --release
+    #[cfg(channel_type = "broadcast")]
+    //#[cfg( any(not(channel_type), channel_type="broadcast") )]
     pub mod channel {
         use super::*;
         use tokio::sync::broadcast;
@@ -194,8 +195,8 @@ mod hub {
     }
 
     // RUSTFLAGS='--cfg channel_type="mpsc"' cargo build --release
-    // #[cfg(not (channel_type = "mpsc"))]
-    #[cfg(channel_type = "mpsc")]
+    #[cfg(any(not(channel_type), channel_type = "mpsc"))]
+    // #[cfg(channel_type = "mpsc")]
     pub mod channel {
         use super::*;
         use tokio::sync::broadcast;
