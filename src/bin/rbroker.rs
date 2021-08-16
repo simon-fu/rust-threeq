@@ -160,8 +160,79 @@ mod hub {
         PUB(tt::Publish),
     }
 
-    type BcSender = tokio::sync::broadcast::Sender<Arc<BcData>>;
-    // type BcSenders = Arc<RwLock<HashMap<u64, BcSender>>>;
+    // #[cfg(channel_type = "mpsc")]
+    #[cfg(not(channel_type = "mpsc"))]
+    pub mod channel {
+        use super::*;
+        use tokio::sync::broadcast;
+        pub type BcSender = broadcast::Sender<Arc<BcData>>;
+        pub type BcRecver = broadcast::Receiver<Arc<BcData>>;
+
+        #[inline(always)]
+        pub fn channel_type_name() -> String {
+            "broadcast".to_string()
+        }
+
+        #[inline(always)]
+        pub fn make_pair() -> (BcSender, BcRecver) {
+            broadcast::channel(16)
+        }
+
+        #[inline(always)]
+        pub async fn recv(rx: &mut BcRecver) -> Result<Arc<BcData>, broadcast::error::RecvError> {
+            rx.recv().await
+        }
+
+        #[inline(always)]
+        pub async fn send(tx: &BcSender, d: Arc<BcData>) -> Result<(), String> {
+            let r = tx.send(d);
+            match r {
+                Ok(_d) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+    }
+
+    // RUSTFLAGS='--cfg channel_type="mpsc"' cargo build --release
+    // #[cfg(not (channel_type = "mpsc"))]
+    #[cfg(channel_type = "mpsc")]
+    pub mod channel {
+        use super::*;
+        use tokio::sync::broadcast;
+        use tokio::sync::mpsc;
+        pub type BcSender = mpsc::Sender<Arc<BcData>>;
+        pub type BcRecver = mpsc::Receiver<Arc<BcData>>;
+
+        #[inline(always)]
+        pub fn channel_type_name() -> String {
+            "mpsc".to_string()
+        }
+
+        #[inline(always)]
+        pub fn make_pair() -> (BcSender, BcRecver) {
+            mpsc::channel(16)
+        }
+
+        #[inline(always)]
+        pub async fn recv(rx: &mut BcRecver) -> Result<Arc<BcData>, broadcast::error::RecvError> {
+            let r = rx.recv().await;
+            match r {
+                Some(d) => Ok(d),
+                None => (Err(broadcast::error::RecvError::Closed)),
+            }
+        }
+
+        #[inline(always)]
+        pub async fn send(tx: &BcSender, d: Arc<BcData>) -> Result<(), String> {
+            let r = tx.send(d).await;
+            match r {
+                Ok(_d) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+    }
+
+    pub use channel::*;
 
     #[derive(Default, Debug)]
     pub struct BcSenders {
@@ -187,7 +258,8 @@ mod hub {
         pub async fn broadcast(&self, d: Arc<BcData>) {
             let senders = self.map.read().await;
             for (_, tx) in senders.iter() {
-                let _ = tx.send(d.clone());
+                //let _r = tx.send(d.clone());
+                let _r = send(tx, d.clone()).await;
             }
         }
     }
@@ -256,8 +328,8 @@ struct Session {
     conn_pkt: tt::Connect,
     packet_id: tt::PacketId,
     last_active_time: Instant,
-    tx: broadcast::Sender<Arc<hub::BcData>>,
-    rx: broadcast::Receiver<Arc<hub::BcData>>,
+    tx: hub::BcSender, // broadcast::Sender<Arc<hub::BcData>>,
+    rx: hub::BcRecver, // broadcast::Receiver<Arc<hub::BcData>>,
     disconnected: bool,
     topic_filters: HashSet<String>,
     last_pub_senders: Weak<BcSenders>,
@@ -266,7 +338,7 @@ struct Session {
 
 impl Session {
     pub fn new(hub: Arc<hub::Hub>, uid: u64) -> Self {
-        let (tx, rx) = broadcast::channel(16);
+        let (tx, rx) = hub::channel::make_pair();
 
         Session {
             hub,
@@ -349,7 +421,7 @@ impl Session {
                     }
                 }
 
-                r = self.rx.recv() =>{
+                r = hub::recv(&mut self.rx) => { // self.rx.recv() =>{
                     match r{
                         Ok(d) => {
                             self.xfer_loop(&mut rd, &mut wr, Some(d)).await?;
@@ -638,7 +710,7 @@ impl Session {
                     }
                 }
 
-                r = self.rx.recv() =>{
+                r = hub::recv(&mut self.rx) => { // self.rx.recv() =>{
                     match r{
                         Ok(d) => {
                             match &*d{
@@ -671,6 +743,8 @@ impl Session {
 }
 
 async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
+    info!("channel type: [{}]", hub::channel_type_name());
+
     let listener = TcpListener::bind(&cfg.tcp_listen_addr).await?;
     info!("mqtt tcp broker listening on {}", cfg.tcp_listen_addr);
 
