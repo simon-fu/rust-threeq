@@ -1,0 +1,25 @@
+syntax = "proto3";
+package helloworld;
+
+service Greeter {
+    rpc SayHello (HelloRequest) returns (HelloReply);
+}
+
+message HelloRequest {
+   string name = 1;
+   bytes data = 2;
+}
+
+message HelloReply {
+    string message = 1;
+}
+
+
+service Threeq {
+    rpc MqttPublish (HelloRequest) returns (HelloReply);
+}
+
+message MqttPublishRequest{
+    string topic = 1;
+    bytes data = 2;
+}
