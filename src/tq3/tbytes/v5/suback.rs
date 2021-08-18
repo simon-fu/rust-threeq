@@ -215,6 +215,16 @@ impl TryFrom<u8> for SubscribeReasonCode {
     }
 }
 
+impl From<QoS> for SubscribeReasonCode {
+    fn from(value: QoS) -> Self {
+        match value {
+            QoS::AtMostOnce => SubscribeReasonCode::QoS0,
+            QoS::AtLeastOnce => SubscribeReasonCode::QoS1,
+            QoS::ExactlyOnce => SubscribeReasonCode::QoS2,
+        }
+    }
+}
+
 impl SubscribeReasonCode {
     pub fn is_success(&self) -> bool {
         return *self == Self::QoS0 || *self == Self::QoS1 || *self == Self::QoS2;

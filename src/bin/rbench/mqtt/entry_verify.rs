@@ -214,10 +214,10 @@ impl<'a> Connector<'a> {
     async fn recv_timeout(&mut self) -> Result<(), Error> {
         let client = self.client.as_mut().unwrap();
         return match timeout(self.args.timeout, client.receiver.recv()).await {
-            Ok(_r) => {
-                error!("recv timeout");
-                Err(Error::Generic(format!("recv timeout")))
-            }
+            Ok(r) => Err(Error::Generic(format!(
+                "expect recv timeout, but got {:?}",
+                r
+            ))),
             Err(_) => Ok(()),
         };
     }

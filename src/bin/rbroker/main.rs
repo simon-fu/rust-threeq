@@ -12,14 +12,13 @@ TODO:
 */
 
 use std::{
-    collections::HashSet,
-    sync::{Arc, Weak},
+    collections::{HashMap, HashSet},
+    sync::Arc,
     time::Duration,
 };
 
 use bytes::{Bytes, BytesMut};
 use clap::Clap;
-use hub::BcSenders;
 use rust_threeq::tq3::{self, tt};
 use std::convert::TryFrom;
 use tokio::{
@@ -33,6 +32,8 @@ use tokio::{
     time::Instant,
 };
 use tracing::{debug, error, info};
+
+mod hub;
 
 // refer https://doc.rust-lang.org/reference/conditional-compilation.html?highlight=target_os#target_os
 // refer https://doc.rust-lang.org/rust-by-example/attribute/cfg.html
@@ -75,18 +76,6 @@ struct Config {
     enable_gc: bool,
 }
 
-// #[derive(Debug, thiserror::Error)]
-// pub enum Error {
-//     #[error("Timeout:{0}")]
-//     Timeout(#[from] Elapsed),
-
-//     #[error("Packet parsing error: {0}")]
-//     TtError(tt::Error),
-
-//     #[error("I/O error: {0}")]
-//     Io(#[from] std::io::Error),
-// }
-
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("I/O error: {0}")]
@@ -108,30 +97,6 @@ pub enum AppError {
     UnexpectPacket(tt::PacketType),
 }
 
-// impl From<std::io::Error> for AppError {
-//     fn from(error: std::io::Error) -> Self {
-//         AppError::IoError(error)
-//     }
-// }
-
-// impl From<tt::Error> for AppError {
-//     fn from(error: tt::Error) -> Self {
-//         AppError::TtError(error)
-//     }
-// }
-
-// impl From<tokio::time::error::Elapsed> for AppError {
-//     fn from(error: tokio::time::error::Elapsed) -> Self {
-//         AppError::ElapsedError(error)
-//     }
-// }
-
-// impl From<num_enum::TryFromPrimitiveError<tt::PacketType>> for AppError {
-//     fn from(error: num_enum::TryFromPrimitiveError<tt::PacketType>) -> Self {
-//         AppError::PackettypeError(error)
-//     }
-// }
-
 impl AppError {
     fn broken_pipe<E>(reason: E) -> Self
     where
@@ -150,199 +115,29 @@ impl AppError {
 
 type AppResult<T> = core::result::Result<T, AppError>;
 
-mod hub {
-    use rust_threeq::tq3::tt;
-    use std::{collections::HashMap, sync::Arc};
-    use tokio::sync::RwLock;
-    use tracing::debug;
-
-    pub enum BcData {
-        PUB(tt::Publish),
-    }
-
-    // RUSTFLAGS='--cfg channel_type="broadcast"' cargo build --release
-    #[cfg(channel_type = "broadcast")]
-    //#[cfg( any(not(channel_type), channel_type="broadcast") )]
-    pub mod channel {
-        use super::*;
-        use tokio::sync::broadcast;
-        pub type BcSender = broadcast::Sender<Arc<BcData>>;
-        pub type BcRecver = broadcast::Receiver<Arc<BcData>>;
-
-        #[inline(always)]
-        pub fn channel_type_name() -> String {
-            "broadcast".to_string()
-        }
-
-        #[inline(always)]
-        pub fn make_pair() -> (BcSender, BcRecver) {
-            broadcast::channel(16)
-        }
-
-        #[inline(always)]
-        pub async fn recv(rx: &mut BcRecver) -> Result<Arc<BcData>, broadcast::error::RecvError> {
-            rx.recv().await
-        }
-
-        #[inline(always)]
-        pub async fn send(tx: &BcSender, d: Arc<BcData>) -> Result<(), String> {
-            let r = tx.send(d);
-            match r {
-                Ok(_d) => Ok(()),
-                Err(e) => Err(e.to_string()),
-            }
-        }
-    }
-
-    // RUSTFLAGS='--cfg channel_type="mpsc"' cargo build --release
-    #[cfg(any(not(channel_type), channel_type = "mpsc"))]
-    // #[cfg(channel_type = "mpsc")]
-    pub mod channel {
-        use super::*;
-        use tokio::sync::broadcast;
-        use tokio::sync::mpsc;
-        pub type BcSender = mpsc::Sender<Arc<BcData>>;
-        pub type BcRecver = mpsc::Receiver<Arc<BcData>>;
-
-        #[inline(always)]
-        pub fn channel_type_name() -> String {
-            "mpsc".to_string()
-        }
-
-        #[inline(always)]
-        pub fn make_pair() -> (BcSender, BcRecver) {
-            mpsc::channel(16)
-        }
-
-        #[inline(always)]
-        pub async fn recv(rx: &mut BcRecver) -> Result<Arc<BcData>, broadcast::error::RecvError> {
-            let r = rx.recv().await;
-            match r {
-                Some(d) => Ok(d),
-                None => (Err(broadcast::error::RecvError::Closed)),
-            }
-        }
-
-        #[inline(always)]
-        pub async fn send(tx: &BcSender, d: Arc<BcData>) -> Result<(), String> {
-            let r = tx.send(d).await;
-            match r {
-                Ok(_d) => Ok(()),
-                Err(e) => Err(e.to_string()),
-            }
-        }
-    }
-
-    pub use channel::*;
-
-    #[derive(Default, Debug)]
-    pub struct BcSenders {
-        map: RwLock<HashMap<u64, BcSender>>,
-    }
-
-    impl BcSenders {
-        #[inline(always)]
-        pub async fn insert(&self, uid: u64, tx: BcSender) -> usize {
-            let mut senders = self.map.write().await;
-            senders.insert(uid, tx);
-            senders.len()
-        }
-
-        #[inline(always)]
-        pub async fn remove(&self, uid: &u64) -> usize {
-            let mut senders = self.map.write().await;
-            senders.remove(&uid);
-            senders.len()
-        }
-
-        #[inline(always)]
-        pub async fn broadcast(&self, d: Arc<BcData>) {
-            let senders = self.map.read().await;
-            for (_, tx) in senders.iter() {
-                //let _r = tx.send(d.clone());
-                let _r = send(tx, d.clone()).await;
-            }
-        }
-    }
-
-    #[derive(Default, Debug)]
-    pub struct Hub {
-        // topic_filter -> senders
-        subscriptions: RwLock<HashMap<String, Arc<BcSenders>>>,
-    }
-
-    impl Hub {
-        #[inline(always)]
-        async fn get_or_add_senders(&self, topic_filter: &str) -> Arc<BcSenders> {
-            let mut map = self.subscriptions.write().await;
-            if !map.contains_key(topic_filter) {
-                map.insert(topic_filter.to_string(), Default::default());
-            }
-            map.get_mut(topic_filter).unwrap().clone()
-        }
-
-        #[inline(always)]
-        pub async fn subscribe(&self, topic_filter: &str, uid: u64, tx: BcSender) {
-            let senders = self.get_or_add_senders(topic_filter).await;
-            let num = senders.insert(uid, tx).await;
-            debug!(
-                "subscribe filter {}, uid {}, num {}",
-                topic_filter, uid, num
-            );
-        }
-
-        #[inline(always)]
-        pub async fn unsubscribe(&self, topic_filter: &str, uid: u64) {
-            let mut map = self.subscriptions.write().await;
-            if let Some(senders) = map.get_mut(topic_filter) {
-                let num = senders.remove(&uid).await;
-                debug!(
-                    "unsubscribe filter {}, uid {}, num {}",
-                    topic_filter, uid, num
-                );
-                if num == 0 {
-                    drop(senders);
-                    map.remove(topic_filter);
-                }
-            }
-        }
-
-        #[inline(always)]
-        pub async fn publish(&self, filter: &str, d: Arc<BcData>) -> Option<Arc<BcSenders>> {
-            let map = self.subscriptions.read().await;
-            match map.get(filter) {
-                Some(senders) => {
-                    senders.broadcast(d).await;
-                    Some(senders.clone())
-                }
-                None => None,
-            }
-        }
-    }
-}
-
 struct Session {
-    hub: Arc<hub::Hub>,
+    // hub: Arc<hub::Hub>,
     uid: u64,
     max_incoming_size: usize,
     keep_alive_ms: u64,
     conn_pkt: tt::Connect,
     packet_id: tt::PacketId,
     last_active_time: Instant,
-    tx: hub::BcSender, // broadcast::Sender<Arc<hub::BcData>>,
-    rx: hub::BcRecver, // broadcast::Receiver<Arc<hub::BcData>>,
+    tx: hub::BcSender,
+    rx: hub::BcRecver,
     disconnected: bool,
     topic_filters: HashSet<String>,
-    last_pub_senders: Weak<BcSenders>,
-    last_pub_topic: String,
+    pub_topic_cache: HashMap<String, Arc<hub::Topic>>,
+    // last_pub_senders: Weak<registry::Topic>,
+    // last_pub_topic: String,
 }
 
 impl Session {
-    pub fn new(hub: Arc<hub::Hub>, uid: u64) -> Self {
+    pub fn new(uid: u64) -> Self {
         let (tx, rx) = hub::channel::make_pair();
 
         Session {
-            hub,
+            // hub,
             uid,
             max_incoming_size: 64 * 1024,
             keep_alive_ms: 30 * 1000,
@@ -353,16 +148,23 @@ impl Session {
             rx,
             disconnected: false,
             topic_filters: HashSet::new(),
-            last_pub_senders: Weak::new(),
-            last_pub_topic: "".to_string(),
+            pub_topic_cache: HashMap::new(),
+            // last_pub_senders: Weak::new(),
+            // last_pub_topic: "".to_string(),
         }
     }
 
     pub async fn cleanup(&mut self) {
         for v in &self.topic_filters {
-            self.hub.unsubscribe(v, self.uid).await;
+            // self.hub.unsubscribe(v, self.uid).await;
+            hub::get().unsubscribe(v, self.uid).await;
         }
         self.topic_filters.clear();
+
+        for r in &self.pub_topic_cache {
+            hub::get().release_topic(r.0).await;
+        }
+        self.pub_topic_cache.clear();
     }
 
     fn check_connect(&mut self) {
@@ -490,26 +292,40 @@ impl Session {
             tt::QoS::ExactlyOnce => {}
         }
 
-        if packet.topic == self.last_pub_topic {
-            if let Some(senders) = self.last_pub_senders.upgrade() {
-                senders
-                    .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
-                    .await;
-                return Ok(());
-            }
+        if let Some(topic) = self.pub_topic_cache.get(&packet.topic) {
+            topic
+                .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
+                .await;
+            return Ok(());
         }
 
-        let senders = self
-            .hub
-            .publish(&packet.topic, Arc::new(hub::BcData::PUB(packet.clone())))
+        let topic = hub::get().acquire_topic(&packet.topic).await;
+        topic
+            .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
             .await;
-
-        if let Some(senders) = senders {
-            self.last_pub_senders = Arc::downgrade(&senders);
-            self.last_pub_topic = packet.topic.clone();
-        }
-
+        self.pub_topic_cache.insert(packet.topic, topic);
         Ok(())
+
+        // if packet.topic == self.last_pub_topic {
+        //     if let Some(senders) = self.last_pub_senders.upgrade() {
+        //         senders
+        //             .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
+        //             .await;
+        //         return Ok(());
+        //     }
+        // }
+
+        // let senders = self
+        //     .hub
+        //     .publish(&packet.topic, Arc::new(hub::BcData::PUB(packet.clone())))
+        //     .await;
+
+        // if let Some(senders) = senders {
+        //     self.last_pub_senders = Arc::downgrade(&senders);
+        //     self.last_pub_topic = packet.topic.clone();
+        // }
+
+        // Ok(())
     }
 
     async fn handle_puback(
@@ -547,11 +363,16 @@ impl Session {
 
         let mut return_codes: Vec<tt::SubscribeReasonCode> = Vec::new();
         for val in packet.filters.iter() {
-            self.hub
+            // self.hub
+            //     .subscribe(&val.path, self.uid, self.tx.clone())
+            //     .await;
+            self.topic_filters.insert(val.path.clone());
+            // return_codes.push(tt::SubscribeReasonCode::QoS0);
+
+            hub::get()
                 .subscribe(&val.path, self.uid, self.tx.clone())
                 .await;
-            self.topic_filters.insert(val.path.clone());
-            return_codes.push(tt::SubscribeReasonCode::QoS0);
+            return_codes.push(tt::SubscribeReasonCode::from(val.qos));
         }
 
         let ack = tt::SubAck::new(packet.pkid, return_codes);
@@ -568,9 +389,11 @@ impl Session {
     ) -> AppResult<()> {
         let packet = tt::Unsubscribe::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
 
-        for topic in packet.filters.iter() {
-            if self.topic_filters.remove(topic) {
-                self.hub.unsubscribe(topic, self.uid).await;
+        for filter in packet.filters.iter() {
+            if self.topic_filters.remove(filter) {
+                // self.hub.unsubscribe(filter, self.uid).await;
+                let r = hub::get().unsubscribe(filter, self.uid).await;
+                info!("unsubscribe result {}", r);
             }
         }
 
@@ -750,7 +573,7 @@ async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error
     info!("mqtt tcp broker listening on {}", cfg.tcp_listen_addr);
 
     SESSION_COUNTER.set(0);
-    let hub = Arc::new(hub::Hub::default());
+    // let hub = Arc::new(hub::Hub::default());
     let mut uid = 0;
 
     loop {
@@ -761,10 +584,10 @@ async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error
                         uid += 1;
                         let span = tracing::span!(tracing::Level::INFO, "", t=uid);
 
-                        let hub0 = hub.clone();
+                        // let hub0 = hub.clone();
                         let f = async move {
                             debug!("connected from {:?}", socket.peer_addr().unwrap());
-                            let mut session = Session::new(hub0, uid);
+                            let mut session = Session::new(uid);
                             SESSION_COUNTER.inc();
                             if let Err(e) = session.run(socket).await {
                                 debug!("session finished error [{:?}]", e);
