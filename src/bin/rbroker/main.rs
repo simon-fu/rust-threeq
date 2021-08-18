@@ -12,8 +12,8 @@ TODO:
 */
 
 use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
+    collections::HashSet,
+    sync::{Arc, Weak},
     time::Duration,
 };
 
@@ -127,9 +127,9 @@ struct Session {
     rx: hub::BcRecver,
     disconnected: bool,
     topic_filters: HashSet<String>,
-    pub_topic_cache: HashMap<String, Arc<hub::Topic>>,
-    // last_pub_senders: Weak<registry::Topic>,
-    // last_pub_topic: String,
+    // pub_topic_cache: HashMap<String, Arc<hub::Topic>>,
+    last_pub_senders: Weak<hub::Topic>,
+    last_pub_topic: String,
 }
 
 impl Session {
@@ -148,9 +148,9 @@ impl Session {
             rx,
             disconnected: false,
             topic_filters: HashSet::new(),
-            pub_topic_cache: HashMap::new(),
-            // last_pub_senders: Weak::new(),
-            // last_pub_topic: "".to_string(),
+            // pub_topic_cache: HashMap::new(),
+            last_pub_senders: Weak::new(),
+            last_pub_topic: "".to_string(),
         }
     }
 
@@ -161,10 +161,15 @@ impl Session {
         }
         self.topic_filters.clear();
 
-        for r in &self.pub_topic_cache {
-            hub::get().release_topic(r.0).await;
+        if !self.last_pub_topic.is_empty() {
+            hub::get().release_topic(&self.last_pub_topic).await;
+            self.last_pub_topic.clear();
         }
-        self.pub_topic_cache.clear();
+
+        // for r in &self.pub_topic_cache {
+        //     hub::get().release_topic(r.0).await;
+        // }
+        // self.pub_topic_cache.clear();
     }
 
     fn check_connect(&mut self) {
@@ -292,28 +297,35 @@ impl Session {
             tt::QoS::ExactlyOnce => {}
         }
 
-        if let Some(topic) = self.pub_topic_cache.get(&packet.topic) {
-            topic
-                .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
-                .await;
-            return Ok(());
+        // if let Some(topic) = self.pub_topic_cache.get(&packet.topic) {
+        //     topic
+        //         .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
+        //         .await;
+        //     return Ok(());
+        // }
+
+        // let topic = hub::get().acquire_topic(&packet.topic).await;
+        // topic
+        //     .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
+        //     .await;
+        // self.pub_topic_cache.insert(packet.topic, topic);
+        // Ok(())
+
+        if packet.topic == self.last_pub_topic {
+            if let Some(senders) = self.last_pub_senders.upgrade() {
+                senders
+                    .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
+                    .await;
+                return Ok(());
+            }
         }
 
         let topic = hub::get().acquire_topic(&packet.topic).await;
         topic
             .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
             .await;
-        self.pub_topic_cache.insert(packet.topic, topic);
-        Ok(())
-
-        // if packet.topic == self.last_pub_topic {
-        //     if let Some(senders) = self.last_pub_senders.upgrade() {
-        //         senders
-        //             .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
-        //             .await;
-        //         return Ok(());
-        //     }
-        // }
+        self.last_pub_senders = Arc::downgrade(&topic);
+        self.last_pub_topic = packet.topic.clone();
 
         // let senders = self
         //     .hub
@@ -325,7 +337,7 @@ impl Session {
         //     self.last_pub_topic = packet.topic.clone();
         // }
 
-        // Ok(())
+        Ok(())
     }
 
     async fn handle_puback(
@@ -392,8 +404,8 @@ impl Session {
         for filter in packet.filters.iter() {
             if self.topic_filters.remove(filter) {
                 // self.hub.unsubscribe(filter, self.uid).await;
-                let r = hub::get().unsubscribe(filter, self.uid).await;
-                info!("unsubscribe result {}", r);
+                let _r = hub::get().unsubscribe(filter, self.uid).await;
+                // info!("unsubscribe result {}", r);
             }
         }
 
