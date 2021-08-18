@@ -7,6 +7,8 @@ pub mod client;
 
 pub mod topic;
 
+pub mod mqtree;
+
 pub type Error = tbytes::Error;
 
 pub type Protocol = tbytes::Protocol;
