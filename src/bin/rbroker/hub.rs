@@ -11,11 +11,11 @@ use tokio::sync::RwLock;
 // use crate::hub::{BcData, BcSender};
 
 #[derive(Debug)]
-struct TopicInner {
+struct PubTopicInner {
     senders: HashMap<u64, BcSender>,
 }
 
-impl TopicInner {
+impl PubTopicInner {
     fn new() -> Self {
         Self {
             senders: HashMap::new(),
@@ -24,17 +24,15 @@ impl TopicInner {
 }
 
 #[derive(Debug)]
-pub struct Topic {
-    inner: RwLock<TopicInner>,
+pub struct PubTopicNode {
+    name: String,
+    inner: RwLock<PubTopicInner>,
     refc: AtomicU64,
 }
 
-impl Topic {
-    fn new() -> Self {
-        Self {
-            inner: RwLock::new(TopicInner::new()),
-            refc: AtomicU64::new(1),
-        }
+impl PubTopicNode {
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     #[inline(always)]
@@ -47,98 +45,134 @@ impl Topic {
 }
 
 #[derive(Debug, Clone)]
-struct RegistryInner {
-    filter_tree: Mqtree<HashMap<u64, BcSender>>,
-    topic_tree: MqtreeR<Arc<Topic>>,
+pub struct PubTopic {
+    hub: Hub,
+    node: Arc<PubTopicNode>,
 }
 
-#[derive(Debug)]
+impl PubTopic {
+    fn new(hub: Hub, node: Arc<PubTopicNode>) -> Self {
+        Self { hub, node }
+    }
+}
+
+impl std::ops::Deref for PubTopic {
+    type Target = PubTopicNode;
+    fn deref(&self) -> &PubTopicNode {
+        &self.node
+    }
+}
+
+impl Drop for PubTopic {
+    fn drop(&mut self) {
+        self.hub.release_pub_topic(&self.name);
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HubInner {
+    filter_tree: Mqtree<HashMap<u64, BcSender>>,
+    topic_tree: MqtreeR<Arc<PubTopicNode>>,
+}
+
+type HubRwLock<T> = std::sync::RwLock<T>;
+
+#[derive(Debug, Clone)]
 pub struct Hub {
-    inner: Arc<RwLock<RegistryInner>>,
+    inner: Arc<HubRwLock<HubInner>>,
 }
 
 impl Hub {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(RegistryInner {
+            inner: Arc::new(HubRwLock::new(HubInner {
                 filter_tree: Mqtree::new(),
                 topic_tree: MqtreeR::new(),
             })),
         }
     }
 
-    pub async fn subscribe(&self, filter: &str, uid: u64, tx: BcSender) {
-        let mut inner = self.inner.write().await;
-        let senders = inner
-            .filter_tree
-            .entry(filter)
-            .get_or_insert(HashMap::new());
+    fn subscribe0(&self, filter: &str, uid: u64, tx: BcSender) -> Vec<Arc<PubTopicNode>> {
+        let mut hub = self.inner.write().unwrap();
+        let senders = hub.filter_tree.entry(filter).get_or_insert(HashMap::new());
         senders.insert(uid, tx.clone());
 
-        let mut topics: Vec<Arc<Topic>> = Vec::new();
-        inner.topic_tree.rmatch_with(filter, &mut |t| {
+        let mut topics: Vec<Arc<PubTopicNode>> = Vec::new();
+        hub.topic_tree.rmatch_with(filter, &mut |t| {
             topics.push(t.clone());
         });
-        for t in topics {
+        topics
+    }
+
+    pub async fn subscribe(&self, filter: &str, uid: u64, tx: BcSender) {
+        for t in self.subscribe0(filter, uid, tx.clone()) {
             let mut ti = t.inner.write().await;
             ti.senders.insert(uid, tx.clone());
         }
     }
 
-    pub async fn unsubscribe(&self, filter: &str, uid: u64) -> bool {
-        let mut inner = self.inner.write().await;
+    pub fn unsubscribe0(&self, filter: &str, uid: u64) -> Vec<Arc<PubTopicNode>> {
+        let mut topics: Vec<Arc<PubTopicNode>> = Vec::new();
+
+        let mut inner = self.inner.write().unwrap();
         if let Some(senders) = inner.filter_tree.entry(filter) {
-            let exist = senders.remove(&uid).is_some();
+            senders.remove(&uid);
             if senders.is_empty() {
                 inner.filter_tree.remove(filter);
             }
 
-            let mut topics: Vec<Arc<Topic>> = Vec::new();
             inner.topic_tree.rmatch_with(filter, &mut |t| {
                 topics.push(t.clone());
             });
+        }
 
-            for t in topics {
-                let mut ti = t.inner.write().await;
-                ti.senders.remove(&uid);
+        topics
+    }
+
+    pub async fn unsubscribe(&self, filter: &str, uid: u64) -> bool {
+        let topics = self.unsubscribe0(filter, uid);
+        for t in &topics {
+            let mut ti = t.inner.write().await;
+            ti.senders.remove(&uid);
+        }
+        topics.len() > 0
+    }
+
+    pub fn acquire_pub_topic<S: Into<String>>(&self, path: S) -> PubTopic {
+        let path = path.into();
+        {
+            let hub = self.inner.read().unwrap();
+            if let Some(node) = hub.topic_tree.get(&path) {
+                node.refc.fetch_add(1, Ordering::Relaxed);
+                return PubTopic::new(self.clone(), node.clone());
             }
+        }
 
-            return exist;
-        } else {
-            return false;
+        {
+            let mut hub = self.inner.write().unwrap();
+            let mut topic_inner = PubTopicInner::new();
+            hub.filter_tree.match_with(&path, &mut |senders| {
+                for r in senders {
+                    topic_inner.senders.insert(*r.0, r.1.clone());
+                }
+            });
+
+            let node = Arc::new(PubTopicNode {
+                name: path,
+                inner: RwLock::new(topic_inner),
+                refc: AtomicU64::new(1),
+            });
+
+            hub.topic_tree.entry(&node.name).get_or_insert(node.clone());
+
+            return PubTopic::new(self.clone(), node);
         }
     }
 
-    pub async fn acquire_topic(&self, path: &str) -> Arc<Topic> {
+    fn release_pub_topic(&self, path: &str) {
         {
-            let inner = self.inner.read().await;
-            if let Some(t) = inner.topic_tree.get(path) {
-                t.refc.fetch_add(1, Ordering::Relaxed);
-                return t.clone();
-            }
-        }
-
-        {
-            let mut inner = self.inner.write().await;
-            let t = Arc::new(Topic::new());
-            {
-                let mut topic_inner = t.inner.write().await;
-                inner.filter_tree.match_with(path, &mut |senders| {
-                    for r in senders {
-                        topic_inner.senders.insert(*r.0, r.1.clone());
-                    }
-                });
-            }
-
-            inner.topic_tree.entry(path).get_or_insert(t.clone());
-            return t;
-        }
-    }
-
-    pub async fn release_topic(&self, path: &str) {
-        {
-            let inner = self.inner.read().await;
-            if let Some(t) = inner.topic_tree.get(path) {
+            let hub = self.inner.read().unwrap();
+            if let Some(t) = hub.topic_tree.get(path) {
                 let value = t.refc.fetch_sub(1, Ordering::Relaxed);
                 if value > 1 {
                     return;
@@ -149,8 +183,12 @@ impl Hub {
         }
 
         {
-            let mut inner = self.inner.write().await;
-            inner.topic_tree.remove(path);
+            let mut hub = self.inner.write().unwrap();
+            if let Some(t) = hub.topic_tree.get(path) {
+                if t.refc.load(Ordering::Relaxed) == 0 {
+                    hub.topic_tree.remove(path);
+                }
+            }
         }
     }
 }
