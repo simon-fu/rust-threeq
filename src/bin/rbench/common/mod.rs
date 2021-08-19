@@ -271,7 +271,7 @@ impl Checker {
         }
         if num_nothing > 0 {
             debug!(
-                "check_lost: recv nothings {}/{}",
+                "check_lost: recv nothings of pubs {}/{}",
                 num_nothing,
                 self.items.len()
             );
@@ -279,6 +279,10 @@ impl Checker {
 
         if self.stati.lost > 0 {
             debug!("check_lost: lost {}", self.stati.lost);
+        }
+
+        if self.items.len() == 0 {
+            warn!("check_lost: no pubs");
         }
     }
 
