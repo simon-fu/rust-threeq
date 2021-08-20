@@ -1,4 +1,5 @@
 use crate::common::config::*;
+use crate::tq3::limit::Rate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -12,7 +13,8 @@ pub struct PubArgs {
     pub connections: u64,
     pub conn_per_sec: u64,
     pub topic: String,
-    pub qps: u64,
+    #[serde(deserialize_with = "Rate::deserialize_with", default = "Rate::default")]
+    pub qps: Rate,
     pub padding_to_size: usize,
     pub packets: u64,
     pub content: String,

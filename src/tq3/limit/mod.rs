@@ -1,13 +1,46 @@
+use serde::Serialize;
 use std::time::{Duration, Instant};
+// use num_rational::Ratio;
+// use num::Integer;
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct Ratio<T> {
+    numer: T,
+    denom: T,
+}
+
+impl<T> Ratio<T> {
+    pub fn new(numer: T, denom: T) -> Self {
+        Self { numer, denom }
+    }
+
+    #[inline]
+    pub const fn numer(&self) -> &T {
+        &self.numer
+    }
+
+    #[inline]
+    pub const fn denom(&self) -> &T {
+        &self.denom
+    }
+}
+
+pub type Rate = Ratio<u64>;
+
+impl Default for Rate {
+    fn default() -> Self {
+        Self { numer: 0, denom: 1 }
+    }
+}
 
 #[derive(Debug)]
 pub struct Pacer {
     kick_time: Instant,
-    rate: u64,
+    rate: Rate,
 }
 
 impl Pacer {
-    pub fn new(rate: u64) -> Self {
+    pub fn new(rate: Rate) -> Self {
         Pacer {
             kick_time: Instant::now(),
             rate,
@@ -32,11 +65,11 @@ impl Pacer {
     //     tokio::time::sleep(d).await;
     // }
     pub fn get_sleep_duration(&self, n: u64) -> Option<Duration> {
-        if self.rate == 0 {
+        if *self.rate.denom() == 0 || *self.rate.numer() == 0 {
             return Some(Duration::from_millis(std::u64::MAX / 2));
         }
 
-        let expect = 1000 * n / self.rate;
+        let expect = 1000 * n * self.rate.denom() / self.rate.numer();
         let diff = expect as i64 - self.kick_time.elapsed().as_millis() as i64;
         if diff > 0 {
             Some(Duration::from_millis(diff as u64))

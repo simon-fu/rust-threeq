@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::Future;
 use histogram::Histogram;
-use rust_threeq::tq3::{self, TryRecv, TryRecvResult, TS};
+use rust_threeq::tq3::{self, limit::Rate, TryRecv, TryRecvResult, TS};
 use tokio::{
     sync::{mpsc, watch},
     task::{JoinError, JoinHandle},
@@ -126,7 +126,7 @@ impl TrafficSpeed {
         self.next_time = now + INTERVAL;
     }
 
-    fn check(&mut self, now: Instant, t: &Traffic) -> Option<(u64, u64)> {
+    fn check_float(&mut self, now: Instant, t: &Traffic) -> Option<(f64, f64)> {
         if now < self.next_time {
             return None;
         }
@@ -136,8 +136,8 @@ impl TrafficSpeed {
             return None;
         }
         let r = (
-            (t.packets - self.traffic.packets) * 1000 / d,
-            (t.bytes - self.traffic.bytes) * 1000 / d / 1000,
+            (t.packets - self.traffic.packets) as f64 * 1000.0 / d as f64,
+            (t.bytes - self.traffic.bytes) as f64 * 1000.0 / d as f64 / 1000.0,
         );
 
         self.traffic.packets = t.packets;
@@ -376,7 +376,7 @@ impl<T: Suber + Send> SubSession<T> {
 }
 
 pub struct PubArgs {
-    pub qps: u64,
+    pub qps: Rate,
     pub packets: u64,
     pub padding_to_size: usize,
     pub content: Bytes,
@@ -529,8 +529,8 @@ impl SessionsResult {
             TaskEvent::Packet(_t, size, d) => {
                 //self.packet_speed.inc_pub(Instant::now(), 1, size);
                 self.traffic.inc(size as u64);
-                if let Some(r) = self.speed.check(Instant::now(), &self.traffic) {
-                    debug!("{}: [{} q/s, {} KB/s]", self.name, r.0, r.1,);
+                if let Some(r) = self.speed.check_float(Instant::now(), &self.traffic) {
+                    debug!("{}: [{:.2} q/s, {:.2} KB/s]", self.name, r.0, r.1,);
                 }
                 let _r = self.latencyh.increment(d * 1000_000);
             }
@@ -644,7 +644,7 @@ impl Sessions {
         }
 
         let (ev_tx, mut ev_rx) = mpsc::channel(10240);
-        let mut pacer = tq3::limit::Pacer::new(sessions_per_sec);
+        let mut pacer = tq3::limit::Pacer::new(Rate::new(sessions_per_sec, 1));
         while results.num_tasks < num_sessions {
             {
                 let remains = results.num_tasks - results.num_readys;

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::tq3::limit::Rate;
 use crate::tq3::tt;
 use rand::{distributions::Alphanumeric, Rng};
 
@@ -39,6 +40,24 @@ impl DeserializeWith for tt::Protocol {
     }
 }
 
+impl DeserializeWith for Rate {
+    fn deserialize_with<'de, D>(de: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(de)?;
+        let v: Vec<&str> = s.split('/').collect();
+
+        let numer: u64 = v[0].parse().unwrap();
+        let denom: u64 = if v.len() > 1 {
+            v[1].parse().unwrap()
+        } else {
+            1
+        };
+        Ok(Rate::new(numer, denom))
+    }
+}
+
 fn default_keep_alive_secs() -> u64 {
     30
 }
@@ -70,7 +89,8 @@ pub struct PubArgs {
         default = "tt::QoS::default"
     )]
     pub qos: tt::QoS,
-    pub qps: u64,
+    #[serde(deserialize_with = "Rate::deserialize_with", default = "Rate::default")]
+    pub qps: Rate,
     pub padding_to_size: usize,
     pub content: String,
     pub packets: u64,
@@ -238,7 +258,8 @@ impl RestApiArg {
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct RestPubsArg {
     pub packets: u64,
-    pub qps: u64,
+    #[serde(deserialize_with = "Rate::deserialize_with", default = "Rate::default")]
+    pub qps: Rate,
     pub padding_to_size: usize,
 }
 
