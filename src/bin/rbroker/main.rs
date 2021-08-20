@@ -91,6 +91,9 @@ pub enum Error {
 
     #[error("unexpect packet type: {0:?}")]
     UnexpectPacket(tt::PacketType),
+
+    #[error("error: {0}")]
+    Generic(String),
 }
 
 impl Error {
@@ -111,36 +114,176 @@ impl Error {
 
 type ThizResult<T> = core::result::Result<T, Error>;
 
+struct Reader<'a> {
+    rd: ReadHalf<'a>,
+    ibuf: BytesMut,
+}
+
+impl<'a> Reader<'a> {
+    pub fn new(rd: ReadHalf<'a>) -> Self {
+        Self {
+            rd,
+            ibuf: BytesMut::new(),
+        }
+    }
+    pub async fn read_packet(
+        &mut self,
+        max_packet_size: usize,
+    ) -> ThizResult<(tt::PacketType, tt::FixedHeader, Bytes)> {
+        loop {
+            let r = tt::check(self.ibuf.iter(), max_packet_size);
+            match r {
+                Ok(h) => {
+                    let bytes = self.ibuf.split_to(h.frame_length()).freeze();
+                    let packet_type = tt::PacketType::try_from(h.get_type_byte())?;
+                    return Ok((packet_type, h, bytes));
+                }
+                Err(tt::Error::InsufficientBytes(_required)) => {}
+                Err(e) => {
+                    return Err(Error::from(e));
+                }
+            }
+
+            let n = self.rd.read_buf(&mut self.ibuf).await?;
+            if n == 0 {
+                return Err(Error::broken_pipe("read disconnect"));
+            }
+        }
+    }
+}
+
+struct Writer<'a> {
+    wr: WriteHalf<'a>,
+    obuf: BytesMut,
+}
+
+impl<'a> Writer<'a> {
+    pub fn new(wr: WriteHalf<'a>) -> Self {
+        Self {
+            wr,
+            obuf: BytesMut::new(),
+        }
+    }
+}
+
 struct Session {
-    // hub: Arc<hub::Hub>,
-    uid: u64,
+    info: Arc<hub::SessionInfo>,
+    protocol: tt::Protocol,
+    rx_bc: hub::BcRecver,
+    rx_ctrl: hub::CtrlRecver,
     max_incoming_size: usize,
     keep_alive_ms: u64,
-    conn_pkt: tt::Connect,
+    // conn_pkt: tt::Connect,
     packet_id: tt::PacketId,
     last_active_time: Instant,
-    tx: hub::BcSender,
-    rx: hub::BcRecver,
     disconnected: bool,
     topic_filters: HashSet<String>,
     // pub_topic_cache: HashMap<String, Arc<hub::Topic>>,
     last_pub_topic: Option<hub::PubTopic>,
 }
 
+const CONNECT_MAX_PACKET_SIZE: usize = 16 * 1024;
+const DEFAUT_KEEP_ALIVE_SEC: u16 = 60;
+
+fn generate_client_id() -> String {
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap();
+    let in_nanos = duration.as_secs() * 1_000_000 + duration.subsec_nanos() as u64;
+    format!("{}@abcdef", in_nanos)
+}
+
+async fn service_connect(
+    uid: u64,
+    reader: &mut Reader<'_>,
+    writer: &mut Writer<'_>,
+) -> ThizResult<Box<Session>> {
+    let (ptype, header, bytes) = reader.read_packet(CONNECT_MAX_PACKET_SIZE).await?;
+
+    if ptype != tt::PacketType::Connect {
+        return Err(Error::Generic(format!(
+            "expect first connect but {:?}",
+            ptype
+        )));
+    }
+
+    let mut conn_pkt = tt::Connect::read(header, bytes)?;
+    let mut conn_ack = tt::ConnAck::new(tt::ConnectReturnCode::Success, false);
+    conn_ack.properties = Some(tt::ConnAckProperties::new());
+
+    if conn_pkt.client_id.is_empty() {
+        conn_pkt.client_id = generate_client_id();
+        debug!("generate clientid {}", conn_pkt.client_id);
+
+        conn_ack
+            .properties
+            .as_mut()
+            .unwrap()
+            .assigned_client_identifier = Some(conn_pkt.client_id.clone());
+    } else {
+        debug!("connect with  clientid {}", conn_pkt.client_id);
+    }
+
+    if conn_pkt.keep_alive == 0 {
+        conn_pkt.keep_alive = DEFAUT_KEEP_ALIVE_SEC;
+    }
+
+    let _ = conn_ack.encode(conn_pkt.protocol, &mut writer.obuf);
+
+    let session = Box::new(Session::new(uid, hub::get().clone(), &conn_pkt));
+
+    if let Some(info) = session.info.hub.add_session(session.info.clone()) {
+        debug!("kick same clientid {:?}", info);
+        let _r = info.tx_ctrl.send(hub::CtrlData::KickByOther).await;
+    }
+
+    Ok(session)
+}
+
+async fn session_entry(uid: u64, mut socket: TcpStream) {
+    debug!("connected from {:?}", socket.peer_addr().unwrap());
+
+    let (rd, wr) = socket.split();
+    let mut reader = Reader::new(rd);
+    let mut writer = Writer::new(wr);
+
+    // let r = Box::pin(service_connect(uid, &mut reader, &mut writer)).await;
+    let r = service_connect(uid, &mut reader, &mut writer).await;
+    let mut session = match r {
+        Err(e) => {
+            debug!("service connect finished with [{:?}]", e);
+            return;
+        }
+        Ok(ss) => ss,
+    };
+
+    let r = session.run(&mut reader, &mut &mut writer).await;
+    match r {
+        Err(e) => {
+            debug!("session finished with [{:?}]", e);
+            return;
+        }
+        Ok(_r) => {}
+    }
+    session.cleanup().await;
+}
+
 impl Session {
-    pub fn new(uid: u64) -> Self {
-        let (tx, rx) = hub::channel::make_pair();
+    pub fn new(uid: u64, hub: hub::Hub, conn_pkt: &tt::Connect) -> Self {
+        let (tx_bc, rx_bc) = hub::make_bc_pair();
+        let (tx_ctrl, rx_ctrl) = hub::make_ctrl_pair();
+        let info = hub::SessionInfo::new(hub, uid, conn_pkt.client_id.clone(), tx_bc, tx_ctrl);
 
         Session {
-            // hub,
-            uid,
+            info,
+            protocol: conn_pkt.protocol,
             max_incoming_size: 64 * 1024,
-            keep_alive_ms: 30 * 1000,
-            conn_pkt: tt::Connect::new(""),
+            keep_alive_ms: conn_pkt.keep_alive as u64 * 1000 * 3 / 2,
+            // conn_pkt: tt::Connect::new(""),
             packet_id: tt::PacketId::default(),
             last_active_time: Instant::now(),
-            tx,
-            rx,
+            rx_bc,
+            rx_ctrl,
             disconnected: false,
             topic_filters: HashSet::new(),
             // pub_topic_cache: HashMap::new(),
@@ -151,11 +294,13 @@ impl Session {
     pub async fn cleanup(&mut self) {
         for v in &self.topic_filters {
             // self.hub.unsubscribe(v, self.uid).await;
-            hub::get().unsubscribe(v, self.uid).await;
+            self.info.hub.unsubscribe(v, self.info.uid).await;
         }
         self.topic_filters.clear();
 
         self.last_pub_topic.take();
+
+        self.info.hub.remove_session(&self.info);
 
         // for r in &self.pub_topic_cache {
         //     hub::get().release_topic(r.0).await;
@@ -163,20 +308,20 @@ impl Session {
         // self.pub_topic_cache.clear();
     }
 
-    fn check_connect(&mut self) {
-        if self.conn_pkt.client_id.is_empty() {
-            let duration = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap();
-            let in_nanos = duration.as_secs() * 1_000_000 + duration.subsec_nanos() as u64;
-            self.conn_pkt.client_id = format!("{}@abcdef", in_nanos); //UNIX_EPOCH
-        }
+    // fn check_connect(&mut self) {
+    //     if self.conn_pkt.client_id.is_empty() {
+    //         let duration = std::time::SystemTime::now()
+    //             .duration_since(std::time::SystemTime::UNIX_EPOCH)
+    //             .unwrap();
+    //         let in_nanos = duration.as_secs() * 1_000_000 + duration.subsec_nanos() as u64;
+    //         self.conn_pkt.client_id = format!("{}@abcdef", in_nanos); //UNIX_EPOCH
+    //     }
 
-        self.keep_alive_ms = self.conn_pkt.keep_alive as u64 * 1000 * 2;
-        if self.keep_alive_ms == 0 {
-            self.keep_alive_ms = 30 * 1000;
-        }
-    }
+    //     self.keep_alive_ms = self.conn_pkt.keep_alive as u64 * 1000 * 2;
+    //     if self.keep_alive_ms == 0 {
+    //         self.keep_alive_ms = 30 * 1000;
+    //     }
+    // }
 
     fn check_alive(&self) -> ThizResult<u64> {
         let now = Instant::now();
@@ -196,10 +341,12 @@ impl Session {
         }
     }
 
-    pub async fn run(&mut self, mut socket: TcpStream) -> ThizResult<()> {
-        //socket.set_nodelay(true)?; // TODO:
-
-        let (mut rd, mut wr) = socket.split();
+    pub async fn run(
+        &mut self,
+        reader: &mut Reader<'_>,
+        writer: &mut Writer<'_>,
+    ) -> ThizResult<()> {
+        self.xfer_loop(reader, writer).await?;
 
         while !self.disconnected {
             let rd_timeout = self.check_alive()?;
@@ -209,10 +356,10 @@ impl Session {
             select! {
 
                 //r = socket.ready(Interest::READABLE) =>{
-                r = rd.peek(&mut dump_buf) =>{
+                r = reader.rd.peek(&mut dump_buf) =>{
                     match r{
                         Ok(_) => {
-                            self.xfer_loop(&mut rd, &mut wr, None).await?;
+                            self.xfer_loop(reader, writer).await?;
                         },
                         Err(e) => {
                             return Err(Error::from(e));
@@ -220,18 +367,26 @@ impl Session {
                     }
                 }
 
-                r = hub::recv(&mut self.rx) => { // self.rx.recv() =>{
+                r = hub::recv_bc(&mut self.rx_bc) => {
                     match r{
                         Ok(d) => {
-                            self.xfer_loop(&mut rd, &mut wr, Some(d)).await?;
+                            self.handle_bc_event(d, writer).await?;
+                            self.xfer_loop(reader, writer).await?;
                         },
                         Err(broadcast::error::RecvError::Lagged(n)) => {
-                            info!("lagged {}", n);
-                            //while let Ok(d) = self.rx.try_recv() { }
+                            debug!("lagged {}", n);
                         },
-                        Err(_) => {
+                        Err(_e) => { }
+                    }
+                }
 
+                r = hub::recv_ctrl(&mut self.rx_ctrl) => {
+                    match r {
+                        Some(d) => {
+                            self.handle_ctrl_event(d, writer).await?;
+                            self.xfer_loop(reader, writer).await?;
                         }
+                        None => {},
                     }
                 }
 
@@ -243,32 +398,32 @@ impl Session {
         Ok(())
     }
 
-    fn is_got_connect(&self) -> bool {
-        !self.conn_pkt.client_id.is_empty()
-    }
-
     async fn handle_connect(
         &mut self,
         fixed_header: tt::FixedHeader,
         bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        self.conn_pkt = tt::Connect::read(fixed_header, bytes)?;
-        let is_empty_clientid = self.conn_pkt.client_id.is_empty();
-        self.check_connect();
+        // self.conn_pkt = tt::Connect::read(fixed_header, bytes)?;
+        // let is_empty_clientid = self.conn_pkt.client_id.is_empty();
+        // self.check_connect();
 
-        let mut connack = tt::ConnAck::new(tt::ConnectReturnCode::Success, false);
+        // let mut connack = tt::ConnAck::new(tt::ConnectReturnCode::Success, false);
 
-        connack.properties = Some(tt::ConnAckProperties::new());
-        if is_empty_clientid {
-            connack
-                .properties
-                .as_mut()
-                .unwrap()
-                .assigned_client_identifier = Some(self.conn_pkt.client_id.clone());
-        }
+        // connack.properties = Some(tt::ConnAckProperties::new());
+        // if is_empty_clientid {
+        //     connack
+        //         .properties
+        //         .as_mut()
+        //         .unwrap()
+        //         .assigned_client_identifier = Some(self.conn_pkt.client_id.clone());
+        // }
 
-        let _ = connack.encode(self.conn_pkt.protocol, obuf);
+        // let _ = connack.encode(self.conn_pkt.protocol, obuf);
+
+        let _conn_pkt = tt::Connect::read(fixed_header, bytes)?;
+        let connack = tt::ConnAck::new(tt::ConnectReturnCode::UnspecifiedError, false);
+        let _r = connack.encode(self.protocol, obuf)?;
         Ok(())
     }
 
@@ -278,12 +433,12 @@ impl Session {
         bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        let packet = tt::Publish::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
+        let packet = tt::Publish::decode(self.protocol, fixed_header, bytes)?;
         match packet.qos {
             tt::QoS::AtMostOnce => {}
             tt::QoS::AtLeastOnce => {
                 let ack = tt::PubAck::new(packet.pkid);
-                let _ = ack.encode(self.conn_pkt.protocol, obuf);
+                let _ = ack.encode(self.protocol, obuf);
             }
             tt::QoS::ExactlyOnce => {}
         }
@@ -305,7 +460,7 @@ impl Session {
         if let Some(pub_topic) = &self.last_pub_topic {
             if packet.topic == pub_topic.name() {
                 pub_topic
-                    .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
+                    .broadcast(hub::BcData::PUB(Arc::new(packet.clone())))
                     .await;
                 return Ok(());
             }
@@ -313,7 +468,7 @@ impl Session {
 
         let pub_topic = hub::get().acquire_pub_topic(&packet.topic);
         pub_topic
-            .broadcast(Arc::new(hub::BcData::PUB(packet.clone())))
+            .broadcast(hub::BcData::PUB(Arc::new(packet.clone())))
             .await;
 
         self.last_pub_topic = Some(pub_topic);
@@ -327,7 +482,7 @@ impl Session {
         bytes: Bytes,
         _obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        let _pkt = tt::PubAck::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
+        let _pkt = tt::PubAck::decode(self.protocol, fixed_header, bytes)?;
         Ok(())
     }
 
@@ -352,7 +507,7 @@ impl Session {
         bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        let packet = tt::Subscribe::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
+        let packet = tt::Subscribe::decode(self.protocol, fixed_header, bytes)?;
 
         let mut return_codes: Vec<tt::SubscribeReasonCode> = Vec::new();
         for val in packet.filters.iter() {
@@ -363,13 +518,13 @@ impl Session {
             // return_codes.push(tt::SubscribeReasonCode::QoS0);
 
             hub::get()
-                .subscribe(&val.path, self.uid, self.tx.clone())
+                .subscribe(&val.path, self.info.uid, self.info.tx_bc.clone())
                 .await;
             return_codes.push(tt::SubscribeReasonCode::from(val.qos));
         }
 
         let ack = tt::SubAck::new(packet.pkid, return_codes);
-        ack.encode(self.conn_pkt.protocol, obuf)?;
+        ack.encode(self.protocol, obuf)?;
 
         Ok(())
     }
@@ -380,18 +535,18 @@ impl Session {
         bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        let packet = tt::Unsubscribe::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
+        let packet = tt::Unsubscribe::decode(self.protocol, fixed_header, bytes)?;
 
         for filter in packet.filters.iter() {
             if self.topic_filters.remove(filter) {
                 // self.hub.unsubscribe(filter, self.uid).await;
-                let _r = hub::get().unsubscribe(filter, self.uid).await;
+                let _r = hub::get().unsubscribe(filter, self.info.uid).await;
                 // info!("unsubscribe result {}", r);
             }
         }
 
         let ack = tt::UnsubAck::new(packet.pkid);
-        ack.encode(self.conn_pkt.protocol, obuf)?;
+        ack.encode(self.protocol, obuf)?;
 
         Ok(())
     }
@@ -413,7 +568,7 @@ impl Session {
         bytes: Bytes,
         _obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        let _pkt = tt::Disconnect::decode(self.conn_pkt.protocol, fixed_header, bytes)?;
+        let _pkt = tt::Disconnect::decode(self.protocol, fixed_header, bytes)?;
         debug!("disconnect by client");
         self.disconnected = true;
         Ok(())
@@ -423,90 +578,115 @@ impl Session {
         Err(Error::UnexpectPacket(packet_type))
     }
 
-    async fn handle_incoming(
+    async fn handle_packet(
         &mut self,
-        ibuf: &mut BytesMut,
+        packet_type: tt::PacketType,
+        h: tt::FixedHeader,
+        bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        while !self.disconnected {
-            let r = tt::check(ibuf.iter(), self.max_incoming_size);
-            match r {
-                Err(tt::Error::InsufficientBytes(_required)) => return Ok(()),
-                Err(e) => return Err(Error::from(e)),
-                Ok(h) => {
-                    let bytes = ibuf.split_to(h.frame_length()).freeze();
-                    let packet_type = tt::PacketType::try_from(h.get_type_byte())?;
-
-                    if !self.is_got_connect() && !matches!(packet_type, tt::PacketType::Connect) {
-                        return Err(Error::ExpectConnectPacket(packet_type));
-                    }
-
-                    self.last_active_time = Instant::now();
-
-                    match packet_type {
-                        tt::PacketType::Connect => {
-                            self.handle_connect(h, bytes, obuf).await?;
-                        }
-                        // tt::PacketType::ConnAck     => todo!(),
-                        tt::PacketType::Publish => {
-                            self.handle_publish(h, bytes, obuf).await?;
-                        }
-                        tt::PacketType::PubAck => {
-                            self.handle_puback(h, bytes, obuf).await?;
-                        }
-                        // tt::PacketType::PubRec      => {self.handle_pubrec(h, bytes, obuf).await?;},
-                        // tt::PacketType::PubRel      => {self.handle_pubrel(h, bytes, obuf).await?;},
-                        // tt::PacketType::PubComp     => {self.handle_pubcomp(h, bytes, obuf).await?;},
-                        tt::PacketType::Subscribe => {
-                            self.handle_subscribe(h, bytes, obuf).await?;
-                        }
-                        // tt::PacketType::SubAck      => todo!(),
-                        tt::PacketType::Unsubscribe => {
-                            self.handle_unsubscribe(h, bytes, obuf).await?;
-                        }
-                        // tt::PacketType::UnsubAck    => todo!(),
-                        tt::PacketType::PingReq => {
-                            self.handle_pingreq(h, bytes, obuf).await?;
-                        }
-                        // tt::PacketType::PingResp    => todo!(),
-                        tt::PacketType::Disconnect => {
-                            self.handle_disconnect(h, bytes, obuf).await?;
-                        }
-                        _ => {
-                            self.handle_unexpect(packet_type).await?;
-                        }
-                    }
-                }
+        match packet_type {
+            tt::PacketType::Connect => {
+                self.handle_connect(h, bytes, obuf).await?;
+            }
+            // tt::PacketType::ConnAck     => todo!(),
+            tt::PacketType::Publish => {
+                self.handle_publish(h, bytes, obuf).await?;
+            }
+            tt::PacketType::PubAck => {
+                self.handle_puback(h, bytes, obuf).await?;
+            }
+            // tt::PacketType::PubRec      => {self.handle_pubrec(h, bytes, obuf).await?;},
+            // tt::PacketType::PubRel      => {self.handle_pubrel(h, bytes, obuf).await?;},
+            // tt::PacketType::PubComp     => {self.handle_pubcomp(h, bytes, obuf).await?;},
+            tt::PacketType::Subscribe => {
+                self.handle_subscribe(h, bytes, obuf).await?;
+            }
+            // tt::PacketType::SubAck      => todo!(),
+            tt::PacketType::Unsubscribe => {
+                self.handle_unsubscribe(h, bytes, obuf).await?;
+            }
+            // tt::PacketType::UnsubAck    => todo!(),
+            tt::PacketType::PingReq => {
+                self.handle_pingreq(h, bytes, obuf).await?;
+            }
+            // tt::PacketType::PingResp    => todo!(),
+            tt::PacketType::Disconnect => {
+                self.handle_disconnect(h, bytes, obuf).await?;
+            }
+            _ => {
+                self.handle_unexpect(packet_type).await?;
             }
         }
         Ok(())
     }
 
-    async fn xfer_loop<'a>(
-        &mut self,
-        rd: &mut ReadHalf<'a>,
-        wr: &mut WriteHalf<'a>,
-        pubd: Option<Arc<hub::BcData>>,
-    ) -> ThizResult<()> {
-        let mut ibuf = BytesMut::with_capacity(1);
-        let mut obuf = BytesMut::new();
+    // async fn handle_incoming(
+    //     &mut self,
+    //     ibuf: &mut BytesMut,
+    //     obuf: &mut BytesMut,
+    // ) -> ThizResult<()> {
+    //     while !self.disconnected {
+    //         let r = tt::check(ibuf.iter(), self.max_incoming_size);
+    //         match r {
+    //             Err(tt::Error::InsufficientBytes(_required)) => return Ok(()),
+    //             Err(e) => return Err(Error::from(e)),
+    //             Ok(h) => {
+    //                 let bytes = ibuf.split_to(h.frame_length()).freeze();
+    //                 let packet_type = tt::PacketType::try_from(h.get_type_byte())?;
 
-        if !pubd.is_none() {
-            match &*pubd.unwrap() {
-                hub::BcData::PUB(packet) => {
-                    packet.encode_with(
-                        self.conn_pkt.protocol,
-                        self.packet_id.next().unwrap(),
-                        packet.qos,
-                        &mut obuf,
-                    )?;
-                }
+    //                 self.last_active_time = Instant::now();
+    //                 self.handle_packet(packet_type, h, bytes, obuf).await?;
+
+    //             }
+    //         }
+    //     }
+    //     Ok(())
+    // }
+
+    async fn handle_bc_event(
+        &mut self,
+        pubd: hub::BcData,
+        writer: &mut Writer<'_>,
+    ) -> ThizResult<()> {
+        match pubd {
+            hub::BcData::PUB(packet) => {
+                packet.encode_with(
+                    self.protocol,
+                    self.packet_id.next().unwrap(),
+                    packet.qos,
+                    &mut writer.obuf,
+                )?;
             }
         }
+        Ok(())
+    }
 
+    async fn handle_ctrl_event(
+        &mut self,
+        data: hub::CtrlData,
+        writer: &mut Writer<'_>,
+    ) -> ThizResult<()> {
+        match data {
+            hub::CtrlData::KickByOther => {
+                debug!("kick by other");
+                let mut packet = tt::Disconnect::new();
+                packet.reason_code = tt::DisconnectReasonCode::SessionTakenOver;
+                packet.encode(self.protocol, &mut writer.obuf)?;
+                self.disconnected = true;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn xfer_loop(
+        &mut self,
+        reader: &mut Reader<'_>,
+        writer: &mut Writer<'_>,
+    ) -> ThizResult<()> {
         while !self.disconnected {
             let rd_timeout = self.check_alive()?;
-            let rd_timeout = if obuf.len() == 0 && rd_timeout > 10000 {
+            let rd_timeout = if writer.obuf.len() == 0 && rd_timeout > 10000 {
                 10000
             } else {
                 rd_timeout
@@ -515,44 +695,42 @@ impl Session {
             let check_time = Instant::now() + Duration::from_millis(rd_timeout);
 
             select! {
-                r = rd.read_buf(&mut ibuf) =>{
-                    let n = r?;
-                    if n == 0 {
-                        return Err(Error::broken_pipe("read disconnect"));
-                    }
-
-                    self.handle_incoming(&mut ibuf, &mut obuf).await?
+                r = reader.read_packet(self.max_incoming_size) => {
+                    let (t, h, bytes) = r?;
+                    self.handle_packet(t, h, bytes, &mut writer.obuf).await?;
                 }
 
-                r = wr.write_buf(&mut obuf), if obuf.len() > 0 => {
+                r = writer.wr.write_buf(&mut writer.obuf), if writer.obuf.len() > 0 => {
                     match r{
                         Ok(_) => { },
                         Err(e) => { return Err(Error::from(e)); },
                     }
                 }
 
-                r = hub::recv(&mut self.rx) => { // self.rx.recv() =>{
+                r = hub::recv_bc(&mut self.rx_bc) => {
                     match r{
                         Ok(d) => {
-                            match &*d{
-                                hub::BcData::PUB(packet) => {
-                                    packet.encode_with( self.conn_pkt.protocol, self.packet_id.next().unwrap(), packet.qos, &mut obuf)?;
-                                },
-                            }
+                            self.handle_bc_event(d, writer).await?;
                         },
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             info!("lagged {}", n);
-                            //while let Ok(d) = self.rx.try_recv() { }
                         },
-                        Err(_) => {
+                        Err(_e) => { }
+                    }
+                }
 
+                r = hub::recv_ctrl(&mut self.rx_ctrl) => {
+                    match r {
+                        Some(d) => {
+                            self.handle_ctrl_event(d, writer).await?;
                         }
+                        None => {},
                     }
                 }
 
                 _ = tokio::time::sleep_until(check_time), if rd_timeout > 0=> {
                     let _ = self.check_alive()?;
-                    if ibuf.len() == 0 && obuf.len() == 0{
+                    if reader.ibuf.len() == 0 && writer.obuf.len() == 0{
                         debug!("no data, sleep");
                         return Ok(());
                     }
@@ -564,34 +742,27 @@ impl Session {
 }
 
 async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
-    info!("channel type: [{}]", hub::channel_type_name());
+    info!("channel type: [{}]", hub::bc_channel_type_name());
 
     let listener = TcpListener::bind(&cfg.tcp_listen_addr).await?;
     info!("mqtt tcp broker listening on {}", cfg.tcp_listen_addr);
 
-    SESSION_COUNTER.set(0);
+    SESSION_GAUGE.set(0);
     // let hub = Arc::new(hub::Hub::default());
-    let mut uid = 0;
+    // let mut uid = 0;
 
     loop {
         tokio::select! {
             result = listener.accept() => {
                 match result{
-                    Ok((socket, _)) => {
-                        uid += 1;
+                    Ok((socket, _r)) => {
+                        let uid = hub::next_uid();
                         let span = tracing::span!(tracing::Level::INFO, "", t=uid);
+                        if let Err(e) = socket.set_nodelay(true) {
+                            error!("socket set nodelay with {:?}", e);
+                        }
 
-                        // let hub0 = hub.clone();
-                        let f = async move {
-                            debug!("connected from {:?}", socket.peer_addr().unwrap());
-                            let mut session = Session::new(uid);
-                            SESSION_COUNTER.inc();
-                            if let Err(e) = session.run(socket).await {
-                                debug!("session finished error [{:?}]", e);
-                            }
-                            SESSION_COUNTER.dec();
-                            session.cleanup().await;
-                        };
+                        let f = session_entry(uid, socket);
                         tokio::spawn(tracing::Instrument::instrument(f, span));
                     },
                     Err(e) => {
@@ -615,15 +786,17 @@ use prometheus::{Encoder, TextEncoder};
 
 // Register & measure some metrics.
 lazy_static::lazy_static! {
-    static ref SESSION_COUNTER: prometheus::IntGauge =
+    static ref SESSION_GAUGE: prometheus::IntGauge =
         prometheus::register_int_gauge!("sessions", "Number of sessions").unwrap();
 }
 
 #[get("/metrics")]
 async fn metrics() -> impl Responder {
+    SESSION_GAUGE.set(hub::get().num_sessions() as i64);
+    let metric_families = prometheus::gather();
+
     let mut buffer = Vec::new();
     let encoder = TextEncoder::new();
-    let metric_families = prometheus::gather();
     encoder.encode(&metric_families, &mut buffer).unwrap();
     let output = String::from_utf8(buffer).unwrap();
     // debug!("{}", output);
