@@ -851,6 +851,9 @@ pub async fn make_connection(name: &str, addr: &str) -> Result<Client, Error> {
             }
         };
         trace!("connected [{}]", addr);
+        if let Err(e) = socket.set_nodelay(true) {
+            error!("socket set nodelay with {:?}", e);
+        }
         let _r = ev_tx.send(Response::Connected).await;
 
         let mut session = Session::new(ev_tx, Instant::now());
