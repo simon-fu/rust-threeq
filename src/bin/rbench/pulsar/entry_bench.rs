@@ -219,8 +219,6 @@ struct Suber {
 #[async_trait]
 impl common::Suber for Suber {
     async fn connect(&mut self) -> Result<(), common::Error> {
-        info!("my id {}", self.id);
-
         let consumer: Consumer<Data, _> = self
             .pulsar
             .consumer()
