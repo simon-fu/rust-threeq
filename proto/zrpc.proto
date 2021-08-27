@@ -1,0 +1,49 @@
+syntax = "proto3";
+package zrpc;
+
+// enum MessageType {
+//     MNone = 0;
+//     HelloReq = 1;
+//     HelloRly = 2;
+//     Ping = 3;
+//     Pong = 4;
+//     ByeReq = 5;
+//     ByeRly = 6;
+// }
+
+
+enum ErrorType {
+    NoError = 0;
+    NotFoundService = 1;
+}
+
+message HelloRequest {
+    string magic = 1;
+    string service_type_name = 2;
+    uint32 keep_alive = 3;
+}
+
+message HelloReply {
+    string magic = 1;
+    int32 code = 2;
+    string msg = 3;
+}
+
+message PingRequest {
+    uint64 timestamp = 1;
+}
+
+message PongReply {
+    uint64 timestamp = 1;
+    uint64 interval = 2;
+}
+
+message ByeRequest {
+    int32 code = 1;
+    string msg = 2;
+}
+
+message ByeReply {
+    int32 code = 1;
+    string msg = 2;
+}

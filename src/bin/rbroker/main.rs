@@ -11,7 +11,7 @@ TODO:
 - support local disk storage
 */
 
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use clap::Clap;
@@ -29,7 +29,13 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
+mod clustee;
+mod cluster;
 mod hub;
+mod registry;
+mod znodes;
+mod zrpc;
+mod zserver;
 
 // refer https://doc.rust-lang.org/reference/conditional-compilation.html?highlight=target_os#target_os
 // refer https://doc.rust-lang.org/rust-by-example/attribute/cfg.html
@@ -70,6 +76,19 @@ struct Config {
         long_about = "enable memory garbage collection"
     )]
     enable_gc: bool,
+
+    #[clap(long = "node", long_about = "this node id", default_value = " ")]
+    node_id: String,
+
+    #[clap(long = "seed", long_about = "seed node address", default_value = " ")]
+    seed: String,
+
+    #[clap(
+        long = "cluster-listen",
+        long_about = "cluster listen address",
+        default_value = "127.0.0.1:50051"
+    )]
+    cluster_listen_addr: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -741,8 +760,81 @@ impl Session {
     }
 }
 
+async fn launch_sub_service(args: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
+    let addr: SocketAddr = args.cluster_listen_addr.parse().unwrap();
+    let node_id = if !args.node_id.is_empty() && args.node_id != " " {
+        args.node_id.clone()
+    } else {
+        mac_address::get_mac_address().unwrap().unwrap().to_string()
+    };
+    let seed = if !args.seed.is_empty() && args.seed != " " {
+        args.seed.clone()
+    } else {
+        "".to_string()
+    };
+    info!("node_id = [{}], seed = [{}]", node_id, seed);
+
+    let f = async move {
+        let service = cluster::SubServiceImpl::default();
+        let r = tonic::transport::Server::builder()
+            .add_service(cluster::sub_service_server::SubServiceServer::new(service))
+            .add_service(cluster::discovery_server::DiscoveryServer::new(
+                cluster::DiscoveryService::new(node_id, addr.port() as i32, seed),
+            ))
+            .serve(addr)
+            .await;
+        match r {
+            Ok(_r) => {
+                tracing::info!("service done");
+            }
+            Err(e) => {
+                tracing::error!("serve at {:?} fail, {:?}", addr, e);
+            }
+        }
+    };
+    tokio::spawn(f);
+
+    // tokio::time::sleep(Duration::from_secs(1)).await;
+    // {
+    //     let mut client = cluster::sub_service_client::SubServiceClient::connect("http://127.0.0.1:50051").await?;
+    //     info!("press Enter to continue...");
+    //     let _ = std::io::Read::read(&mut std::io::stdin(), &mut [0u8]).unwrap();
+
+    //     let request = tonic::Request::new(cluster::SubRequest {
+    //         tenant: "tt1".to_string(),
+    //         topic: "t1/t2".to_string()
+    //     });
+
+    //     let r = client.subscribe(request).await;
+    //     if let Err(e) = &r {
+    //         error!("{:?}", e.code());
+    //     }
+    //     let response = r?;
+
+    //     println!("RESPONSE={:?}", response);
+    // }
+
+    // {
+    //     let mut client = cluster::discovery_client::DiscoveryClient::connect("http://127.0.0.1:50051").await?;
+    //     info!("press Enter to continue...");
+    //     let _ = std::io::Read::read(&mut std::io::stdin(), &mut [0u8]).unwrap();
+
+    //     let r = client.dummy(tonic::Request::new(cluster::Empty{})).await;
+    //     if let Err(e) = &r {
+    //         error!("{:?}", e.code());
+    //     }
+    //     let response = r?;
+
+    //     println!("RESPONSE={:?}", response);
+    // }
+
+    Ok::<(), Box<dyn std::error::Error>>(())
+}
+
 async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
     info!("channel type: [{}]", hub::bc_channel_type_name());
+
+    launch_sub_service(cfg).await?;
 
     let listener = TcpListener::bind(&cfg.tcp_listen_addr).await?;
     info!("mqtt tcp broker listening on {}", cfg.tcp_listen_addr);
@@ -781,7 +873,7 @@ async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error
     }
 }
 
-use actix_web::{get, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, HttpResponse, Responder};
 use prometheus::{Encoder, TextEncoder};
 
 // Register & measure some metrics.
@@ -809,6 +901,10 @@ async fn async_main() -> std::io::Result<()> {
     let cfg = Config::parse();
     info!("cfg={:?}", cfg);
 
+    if cfg.enable_gc {
+        clustee::run().await; // TODO: remove this
+    }
+
     let tokio_h = tokio::spawn(async move {
         match run_server(&cfg).await {
             Ok(_) => {}
@@ -817,8 +913,9 @@ async fn async_main() -> std::io::Result<()> {
             }
         }
     });
+    // let _r = tokio_h.await;
 
-    let actix_h = HttpServer::new(|| App::new().service(metrics))
+    let actix_h = actix_web::HttpServer::new(|| actix_web::App::new().service(metrics))
         .workers(1)
         .bind("127.0.0.1:8080")
         .expect("Couldn't bind to 127.0.0.1:8080")

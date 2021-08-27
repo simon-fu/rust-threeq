@@ -1,0 +1,24 @@
+syntax = "proto3";
+package znodes;
+
+message NodeInfo {
+    string uid = 1;
+    repeated string addrs = 2;
+}
+
+message NodeSyncRequest {
+    string uid = 1;
+    repeated NodeInfo nodes = 2;
+    int32 port = 3;
+    string your_active_addr = 4;
+}
+
+message NodeSyncReply {
+    string uid = 1;
+    string your_reflex_addr = 2;
+    repeated NodeInfo nodes = 3;
+}
+
+service Discovery {
+    rpc sync_nodes (NodeSyncRequest) returns (NodeSyncReply);
+}
