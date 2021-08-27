@@ -1,8 +1,8 @@
 // TODO:
 // - rpc timeout
 // - client.call type safe, only allow the message belone to the specifc service
-// - client.call return future
 // - client state machine, retry
+// done - client.call return future
 // done - client request close request to server
 //
 
@@ -14,11 +14,14 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
-use paste::paste;
 use prost::Message;
 use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::task::Context;
+use std::task::Poll;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -30,10 +33,6 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tracing::debug;
 use tracing::error;
-
-mod rpc {
-    include!(concat!(env!("OUT_DIR"), "/zrpc.rs"));
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -68,7 +67,7 @@ macro_rules! define_msgs_ {
         };
         ($val:expr, $id:ident, $($ids:ident),*$(,)?) => {
             paste! {
-                const [<$id:upper _ID>]: i32 = $val;
+                pub const [<$id:upper _ID>]: i32 = $val;
 
                 impl Id32 for $id {
                     fn id(&self) -> i32 {
@@ -89,21 +88,21 @@ macro_rules! define_msgs {
         };
     }
 
-use rpc::ByeReply;
-use rpc::ByeRequest;
-use rpc::HelloReply;
-use rpc::HelloRequest;
-use rpc::PingRequest;
-use rpc::PongReply;
-define_msgs_!(
-    1,
-    HelloRequest,
-    HelloReply,
-    PingRequest,
-    PongReply,
-    ByeRequest,
-    ByeReply
-);
+mod msg {
+    include!(concat!(env!("OUT_DIR"), "/zrpc.rs"));
+
+    use super::Id32;
+    use paste::paste;
+    define_msgs_!(
+        1,
+        HelloRequest,
+        HelloReply,
+        PingRequest,
+        PongReply,
+        ByeRequest,
+        ByeReply
+    );
+}
 
 #[inline]
 fn is_internal_packet(ptype: i32) -> bool {
@@ -207,15 +206,15 @@ impl Session {
 
         // let packet_type = rpc::MessageType::from_i32(ptype).unwrap();
         match ptype {
-            HELLOREQUEST_ID => {
-                //rpc::MessageType::HelloReq => {
-                let pkt = rpc::HelloRequest::decode(&mut bytes)?;
+            msg::HELLOREQUEST_ID => {
+                //msg::MessageType::HelloReq => {
+                let pkt = msg::HelloRequest::decode(&mut bytes)?;
                 debug!("server: <= seq {}, {:?}", seq, pkt);
                 if pkt.magic != MAGIC {
                     return Err(Error::Generic(format!("unexpect magic {}", pkt.magic)));
                 }
 
-                let mut reply = rpc::HelloReply::default();
+                let mut reply = msg::HelloReply::default();
                 reply.magic = MAGIC.to_string();
                 {
                     let services = self.services.read().unwrap();
@@ -223,7 +222,7 @@ impl Session {
                         self.service = Some(s.clone());
                         reply.code = 0;
                     } else {
-                        reply.code = rpc::ErrorType::NotFoundService as i32;
+                        reply.code = msg::ErrorType::NotFoundService as i32;
                         reply.msg = format!("Not found service {}", pkt.service_type_name);
                         debug!("{}", reply.msg);
                     }
@@ -232,17 +231,17 @@ impl Session {
                 encode_msg(seq, &reply, obuf)?;
                 debug!("server: => seq {}, {:?}", seq, reply);
             }
-            PINGREQUEST_ID => {
-                // rpc::MessageType::Ping => {
-                let pkt = rpc::PingRequest::decode(&mut bytes)?;
+            msg::PINGREQUEST_ID => {
+                // msg::MessageType::Ping => {
+                let pkt = msg::PingRequest::decode(&mut bytes)?;
                 debug!("server: <= seq {}, {:?}", seq, pkt);
-                let reply = rpc::PongReply::default();
+                let reply = msg::PongReply::default();
                 encode_msg(seq, &reply, obuf)?;
                 debug!("server: => seq {}, {:?}", seq, reply);
             }
-            BYEREQUEST_ID => {
-                // rpc::MessageType::ByeReq => {
-                let pkt = rpc::ByeRequest::decode(&mut bytes)?;
+            msg::BYEREQUEST_ID => {
+                // msg::MessageType::ByeReq => {
+                let pkt = msg::ByeRequest::decode(&mut bytes)?;
                 debug!("server: <= seq {}, {:?}", seq, pkt);
                 if self.service.is_some() {
                     self.service
@@ -253,7 +252,7 @@ impl Session {
                 }
 
                 if seq > 0 {
-                    let reply = rpc::ByeReply::default();
+                    let reply = msg::ByeReply::default();
                     encode_msg(seq, &reply, obuf)?;
                     debug!("server: => seq {}, {:?}", seq, reply);
                 } else {
@@ -460,7 +459,7 @@ impl ClientWork {
 
     fn check_ping(&mut self, now: Instant) -> Result<bool, Error> {
         if self.pingable && now >= self.next_ping_time {
-            let pkt = rpc::PingRequest::default();
+            let pkt = msg::PingRequest::default();
             let seq = self.next_seq();
             encode_msg(seq, &pkt, &mut self.obuf)?;
             debug!("client: => seq {}, {:?}", seq, pkt);
@@ -505,15 +504,15 @@ impl ClientWork {
             if is_internal_packet(ptype) {
                 // let packet_type = rpc::MessageType::from_i32(ptype).unwrap();
                 match ptype {
-                    PONGREPLY_ID => {
+                    msg::PONGREPLY_ID => {
                         // rpc::MessageType::Pong => {
                         self.calc_next_ping_time();
-                        let pkt = rpc::PongReply::decode(&mut bytes)?;
+                        let pkt = msg::PongReply::decode(&mut bytes)?;
                         debug!("client: <= seq {}, {:?}", seq, pkt);
                     }
-                    BYEREPLY_ID => {
+                    msg::BYEREPLY_ID => {
                         // rpc::MessageType::ByeRly => {
-                        let pkt = rpc::ByeReply::decode(&mut bytes)?;
+                        let pkt = msg::ByeReply::decode(&mut bytes)?;
                         debug!("client: <= seq {}, {:?}", seq, pkt);
                     }
                     _ => {
@@ -540,7 +539,7 @@ impl ClientWork {
                 let _r = tx.send(());
             }
             Command::Close(tx) => {
-                let pkt = rpc::ByeRequest::default();
+                let pkt = msg::ByeRequest::default();
                 encode_msg(0, &pkt, &mut self.obuf)?;
                 wr.write_all_buf(&mut self.obuf).await?;
                 let _r = tx.send(());
@@ -677,6 +676,41 @@ pub trait ClientWatcher: Send {
     async fn on_disconnect(&mut self, reason: Reason, detail: &Error);
 }
 
+pub struct CallFuture<M> {
+    phantom: PhantomData<M>,
+    rx: oneshot::Receiver<Response>,
+}
+
+impl<M> CallFuture<M> {
+    fn new(rx: oneshot::Receiver<Response>) -> Self {
+        Self {
+            phantom: PhantomData,
+            rx,
+        }
+    }
+}
+
+impl<M: Message + Default + Unpin> futures::Future for CallFuture<M> {
+    type Output = Result<M, Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::new(&mut self.rx).poll(cx) {
+            Poll::Ready(Ok(r)) => match r {
+                Response::Reply(mut r) => {
+                    let reply = M::decode(&mut r.1)?;
+                    debug!("client: <= seq {}, {:?}", r.0, reply);
+                    Poll::Ready(Ok(reply))
+                }
+            },
+            Poll::Ready(Err(_)) => Poll::Ready(Err(Error::Generic(
+                "worker unexpectedly disconnected".into(),
+            )
+            .into())),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 pub struct Client {
     work: Option<Box<ClientWork>>,
     tx: mpsc::Sender<Command>,
@@ -687,7 +721,7 @@ impl Client {
         let (tx, rx) = mpsc::channel(32);
         Self {
             work: Some(Box::new(ClientWork::new(rx))),
-            tx: tx,
+            tx,
         }
     }
 
@@ -715,7 +749,7 @@ impl Client {
 
         let mut work = self.work.take().unwrap();
 
-        let mut hello = rpc::HelloRequest::default();
+        let mut hello = msg::HelloRequest::default();
         hello.magic = MAGIC.to_string();
         hello.service_type_name = work.cfg.service_type.clone();
         hello.keep_alive = work.cfg.keep_alive;
@@ -732,7 +766,10 @@ impl Client {
             }
         });
 
-        let reply: rpc::HelloReply = self.call(hello).await?;
+        // let reply: msg::HelloReply = self.call(hello).await?.await?;
+        let r: CallFuture<msg::HelloReply> = self.call(hello).await?;
+        let reply = r.await?;
+
         if reply.magic != MAGIC {
             return Err(Error::Generic(format!("unexpect magic {}", reply.magic)));
         }
@@ -765,7 +802,7 @@ impl Client {
         }
     }
 
-    pub async fn call<M1, M2>(&mut self, msg: M1) -> Result<M2, Error>
+    pub async fn call<M1, M2>(&mut self, msg: M1) -> Result<CallFuture<M2>, Error>
     where
         M1: Id32 + Message,
         M2: Id32 + Message + Default,
@@ -782,13 +819,6 @@ impl Client {
         debug!("client: => seq {}, ptype {}, {:?}", 0, msg.id(), msg);
         let _r = self.tx.send(Command::Call(req)).await;
 
-        let rsp = rx.await?;
-        match rsp {
-            Response::Reply(mut r) => {
-                let reply = M2::decode(&mut r.1)?;
-                debug!("client: <= seq {}, {:?}", r.0, reply);
-                Ok(reply)
-            }
-        }
+        Ok(CallFuture::new(rx))
     }
 }

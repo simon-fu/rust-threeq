@@ -49,7 +49,7 @@ pub async fn run() {
         .bind(addr)
         .await
         .expect(&format!("Couldn't bind to {}", addr));
-    debug!("dicovery listen at {}", addr);
+    debug!("cluster service at {}", addr);
 
     tokio::spawn(async move {
         let mut client = zrpc::Client::builder()
@@ -64,7 +64,9 @@ pub async fn run() {
                 debug!("client connect ok, {:?}", addr);
                 let mut req = znodes::NodeSyncRequest::default();
                 req.uid = "req 111".to_string();
-                let reply: znodes::NodeSyncReply = client.call(req).await.unwrap();
+                let r = client.call(req).await.unwrap();
+                let reply: znodes::NodeSyncReply = r.await.unwrap();
+                // let reply: znodes::NodeSyncReply = client.call(req).await.unwrap();
                 info!("test reply: {:?}", reply);
             }
             Err(e) => {
