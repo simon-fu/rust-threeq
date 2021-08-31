@@ -30,7 +30,6 @@ use tokio::{
 use tracing::{debug, error, info};
 
 mod clustee;
-mod cluster;
 mod hub;
 mod registry;
 mod znodes;
@@ -760,77 +759,6 @@ impl Session {
     }
 }
 
-async fn launch_sub_service(args: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
-    let addr: std::net::SocketAddr = args.cluster_listen_addr.parse().unwrap();
-    let node_id = if !args.node_id.is_empty() && args.node_id != " " {
-        args.node_id.clone()
-    } else {
-        mac_address::get_mac_address().unwrap().unwrap().to_string()
-    };
-    let seed = if !args.seed.is_empty() && args.seed != " " {
-        args.seed.clone()
-    } else {
-        "".to_string()
-    };
-    info!("node_id = [{}], seed = [{}]", node_id, seed);
-
-    let f = async move {
-        let service = cluster::SubServiceImpl::default();
-        let r = tonic::transport::Server::builder()
-            .add_service(cluster::sub_service_server::SubServiceServer::new(service))
-            .add_service(cluster::discovery_server::DiscoveryServer::new(
-                cluster::DiscoveryService::new(node_id, addr.port() as i32, seed),
-            ))
-            .serve(addr)
-            .await;
-        match r {
-            Ok(_r) => {
-                tracing::info!("service done");
-            }
-            Err(e) => {
-                tracing::error!("serve at {:?} fail, {:?}", addr, e);
-            }
-        }
-    };
-    tokio::spawn(f);
-
-    // tokio::time::sleep(Duration::from_secs(1)).await;
-    // {
-    //     let mut client = cluster::sub_service_client::SubServiceClient::connect("http://127.0.0.1:50051").await?;
-    //     info!("press Enter to continue...");
-    //     let _ = std::io::Read::read(&mut std::io::stdin(), &mut [0u8]).unwrap();
-
-    //     let request = tonic::Request::new(cluster::SubRequest {
-    //         tenant: "tt1".to_string(),
-    //         topic: "t1/t2".to_string()
-    //     });
-
-    //     let r = client.subscribe(request).await;
-    //     if let Err(e) = &r {
-    //         error!("{:?}", e.code());
-    //     }
-    //     let response = r?;
-
-    //     println!("RESPONSE={:?}", response);
-    // }
-
-    // {
-    //     let mut client = cluster::discovery_client::DiscoveryClient::connect("http://127.0.0.1:50051").await?;
-    //     info!("press Enter to continue...");
-    //     let _ = std::io::Read::read(&mut std::io::stdin(), &mut [0u8]).unwrap();
-
-    //     let r = client.dummy(tonic::Request::new(cluster::Empty{})).await;
-    //     if let Err(e) = &r {
-    //         error!("{:?}", e.code());
-    //     }
-    //     let response = r?;
-
-    //     println!("RESPONSE={:?}", response);
-    // }
-
-    Ok::<(), Box<dyn std::error::Error>>(())
-}
-
 async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
     info!("channel type: [{}]", hub::bc_channel_type_name());
 
@@ -919,11 +847,6 @@ async fn async_main() -> std::io::Result<()> {
 
     let cfg = Config::parse();
     info!("cfg={:?}", cfg);
-
-    // TODO: remove this
-    if cfg.enable_gc {
-        let _r = launch_sub_service(&cfg).await;
-    }
 
     let tokio_h = tokio::spawn(async move {
         match run_server(&cfg).await {
