@@ -2,13 +2,15 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use super::znodes::{self, NodeInfo, FullSyncRequest, FullSyncReply, DeltaSyncRequest, DeltaSyncReply};
+use super::znodes::{
+    self, DeltaSyncReply, DeltaSyncRequest, FullSyncReply, FullSyncRequest, NodeInfo,
+};
 use super::zrpc;
-use tokio::sync::{RwLock, broadcast, watch};
-use tracing::{debug, error, info, trace, warn};
-use tracing::Instrument;
 use async_trait::async_trait;
 use std::sync::Arc;
+use tokio::sync::{broadcast, watch, RwLock};
+use tracing::Instrument;
+use tracing::{debug, error, info, trace, warn};
 
 // macro_rules! define_var {
 //     ($val:expr,) => {
@@ -26,9 +28,6 @@ use std::sync::Arc;
 //     println!("{}", b);
 //     println!("{}", c);
 // }
-
-
-
 
 // pub struct Node {
 //     phantom: PhantomData<bool>, // prevent construct from outside
@@ -73,23 +72,21 @@ use std::sync::Arc;
 //     }
 // }
 
-
 #[derive(Default)]
 struct Delta {
-    data: HashMap<String, NodeInfo> ,
+    data: HashMap<String, NodeInfo>,
     ver: u64,
     src: String,
 }
 
-
 #[derive(Default, Clone)]
 struct Nodes {
-    data: HashMap<String, NodeInfo> ,
+    data: HashMap<String, NodeInfo>,
     ver: u64,
 }
 
 impl Nodes {
-    fn merge_node(&mut self, info: &NodeInfo, delta: &mut Delta) -> bool{
+    fn merge_node(&mut self, info: &NodeInfo, delta: &mut Delta) -> bool {
         let exist = self.data.get_mut(&info.uid);
         if exist.is_none() {
             //debug!("merge_node: add node {:?}", info);
@@ -102,7 +99,10 @@ impl Nodes {
         for addr in &info.addrs {
             if !node.addrs.contains(addr) {
                 node.addrs.push(addr.clone());
-                let delta_node = delta.data.entry(node.uid.clone()).or_insert(NodeInfo::default());
+                let delta_node = delta
+                    .data
+                    .entry(node.uid.clone())
+                    .or_insert(NodeInfo::default());
                 delta_node.addrs.push(addr.clone());
             }
         }
@@ -122,22 +122,29 @@ impl Nodes {
         let node = self.data.get_mut(uid).unwrap();
         if !node.addrs.contains(&addr) {
             node.addrs.push(addr.clone());
-            let delta_node = delta.data.entry(node.uid.clone()).or_insert(NodeInfo::default());
+            let delta_node = delta
+                .data
+                .entry(node.uid.clone())
+                .or_insert(NodeInfo::default());
             delta_node.addrs.push(addr);
         }
         is_add_node
     }
 }
 
-
 #[derive(Default)]
 struct SeqData {
     nodes: Nodes,
-    history: VecDeque< Arc<Delta> >,
+    history: VecDeque<Arc<Delta>>,
 }
 
 impl SeqData {
-    fn merge_full(&mut self, local_uid: &str, req: FullSyncRequest, addr: String) -> (u64, Option<HashSet<String>>) {
+    fn merge_full(
+        &mut self,
+        local_uid: &str,
+        req: FullSyncRequest,
+        addr: String,
+    ) -> (u64, Option<HashSet<String>>) {
         if req.src == local_uid {
             return (self.nodes.ver, None);
         }
@@ -168,7 +175,11 @@ impl SeqData {
         }
     }
 
-    fn merge_delta(&mut self, local_uid: &str, req: DeltaSyncRequest) -> (Option<u64>, Option<HashSet<String>>) {
+    fn merge_delta(
+        &mut self,
+        local_uid: &str,
+        req: DeltaSyncRequest,
+    ) -> (Option<u64>, Option<HashSet<String>>) {
         if req.src == local_uid {
             return (None, None);
         }
@@ -181,7 +192,7 @@ impl SeqData {
                 uids.insert(info.uid.clone());
             }
         }
-        
+
         if !delta.data.is_empty() {
             nodes.ver += 1;
             delta.ver = nodes.ver;
@@ -207,7 +218,7 @@ impl SeqData {
         }
 
         let first_ver = self.history.front().unwrap().ver;
-        if ver <  first_ver{
+        if ver < first_ver {
             return None;
         }
 
@@ -239,7 +250,7 @@ struct LocalNode {
 impl LocalNode {
     fn new(uid: String, port: i32) -> Self {
         Self {
-            uid, 
+            uid,
             port,
             ..Default::default()
         }
@@ -272,7 +283,6 @@ impl LocalNode {
     }
 }
 
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
@@ -283,7 +293,6 @@ pub enum Error {
 
     #[error("TryConnectFail")]
     TryConnectFail,
-
     // #[error("error: {0}")]
     // Generic(String),
 }
@@ -295,7 +304,12 @@ struct NodeSyncer {
 }
 
 impl NodeSyncer {
-    async fn sync_with_addr( &mut self, client: &mut zrpc::Client, addr: &String,  delta_rx: &mut watch::Receiver<u64>, ) -> Result<(), Error> {
+    async fn sync_with_addr(
+        &mut self,
+        client: &mut zrpc::Client,
+        addr: &String,
+        delta_rx: &mut watch::Receiver<u64>,
+    ) -> Result<(), Error> {
         let (tx, mut disconn_rx) = broadcast::channel(2);
 
         #[derive(Debug)]
@@ -308,7 +322,7 @@ impl NodeSyncer {
                 let _r = self.0.send(());
             }
         }
-        
+
         client.watch(Box::new(Watcher(tx))).await?;
 
         {
@@ -344,34 +358,32 @@ impl NodeSyncer {
                 let _reply: FullSyncReply = r.await?;
                 self.ver = req.data_ver;
             }
-
         }
         Ok(())
     }
 
-    async fn try_connect(&mut self) -> Result<(zrpc::Client, String), Error>  {
+    async fn try_connect(&mut self) -> Result<(zrpc::Client, String), Error> {
         let r = self.local.data.read().await.get_node_addrs(&self.uid);
 
         if let Some(addrs) = r {
             for addr in addrs {
                 let mut client = zrpc::Client::builder()
-                .service_type(znodes::service_type())
-                .keep_alive(2)
-                .build();
-        
+                    .service_type(znodes::service_type())
+                    .keep_alive(2)
+                    .build();
+
                 let r = client.connect(&addr).await;
                 if let Err(e) = r {
                     warn!("try fail, {:?}", e);
                     continue;
                 }
                 return Ok((client, addr));
-
             }
         }
         return Err(Error::TryConnectFail);
     }
 
-    async fn run(&mut self, delta_rx: &mut watch::Receiver<u64>) -> Result<(), Error>{
+    async fn run(&mut self, delta_rx: &mut watch::Receiver<u64>) -> Result<(), Error> {
         let mut wait_secs = 1;
         loop {
             let r = self.try_connect().await;
@@ -380,15 +392,15 @@ impl NodeSyncer {
                     info!("connected to node [{}], addr [{}]", self.uid, addr);
                     wait_secs = 1; // reset timeout
                     let _r = self.sync_with_addr(&mut client, &addr, delta_rx).await;
-                },
+                }
                 Err(_e) => {
                     wait_secs *= 2;
                     if wait_secs > 16 {
                         wait_secs = 16;
                     }
-                },
+                }
             }
-            
+
             debug!("wait for next round in seconds {}", wait_secs);
             tokio::select! {
                 _r = delta_rx.changed() => { }
@@ -406,14 +418,18 @@ struct Handler {
 
 #[async_trait]
 impl znodes::Handler for Handler {
-    async fn handle_full_sync(&self, session: &zrpc::Session, req: FullSyncRequest) -> FullSyncReply {
+    async fn handle_full_sync(
+        &self,
+        session: &zrpc::Session,
+        req: FullSyncRequest,
+    ) -> FullSyncReply {
         trace!("serivce: <= full sync, {:?}", req);
 
         let addr = format!("{}:{}", session.remote_addr().ip(), req.port);
 
         let mut data = self.local.data.write().await;
         let (ver, uids) = data.merge_full(&self.local.uid, req, addr.clone());
-        let _r  =self.tx.send(ver); // always kick 
+        let _r = self.tx.send(ver); // always kick
         self.launch_syncers(uids).await;
 
         let mut reply = FullSyncReply::default();
@@ -424,13 +440,17 @@ impl znodes::Handler for Handler {
         reply
     }
 
-    async fn handle_delta_sync(&self, _session: &zrpc::Session, req: DeltaSyncRequest) -> DeltaSyncReply {
+    async fn handle_delta_sync(
+        &self,
+        _session: &zrpc::Session,
+        req: DeltaSyncRequest,
+    ) -> DeltaSyncReply {
         trace!("serivce: <= delta sync, {:?}", req);
 
         let mut data = self.local.data.write().await;
         let (ver, uids) = data.merge_delta(&self.local.uid, req);
         if let Some(ver) = ver {
-            let _r  =self.tx.send(ver);
+            let _r = self.tx.send(ver);
         }
         self.launch_syncers(uids).await;
 
@@ -439,7 +459,6 @@ impl znodes::Handler for Handler {
         reply
     }
 }
-
 
 impl Handler {
     fn new<S: Into<String>>(uid: S, port: i32) -> Self {
@@ -452,15 +471,15 @@ impl Handler {
         }
     }
 
-    async fn kick_seed(&self, addr: &str) -> Result<(), Error>{
+    async fn kick_seed(&self, addr: &str) -> Result<(), Error> {
         let mut client = zrpc::Client::builder()
-        .service_type(znodes::service_type())
-        .keep_alive(2)
-        .build();
+            .service_type(znodes::service_type())
+            .keep_alive(2)
+            .build();
 
         client.connect(&addr).await?;
         // .expect(&format!("fail to connect to seed [{}]", addr));
-        
+
         let mut req = self.local.build_full_sync().await;
         req.your_active_addr = addr.to_string();
 
@@ -471,19 +490,23 @@ impl Handler {
         Ok(())
     }
 
-    async fn launch_syncers(&self, uids: Option<HashSet<String>> ) {
+    async fn launch_syncers(&self, uids: Option<HashSet<String>>) {
         if let Some(uids) = uids {
             for uid in uids {
                 if uid == self.local.uid {
                     continue;
                 }
-                
+
                 info!("found node [{}]", uid);
-                let mut syncer = NodeSyncer{ uid:uid.clone(), local: self.local.clone(), ver: 0 };
+                let mut syncer = NodeSyncer {
+                    uid: uid.clone(),
+                    local: self.local.clone(),
+                    ver: 0,
+                };
                 let mut rx = self.rx.clone();
-    
-                let uid:&str = &uid;
-                let span = tracing::span!(tracing::Level::INFO, "", sync=uid);
+
+                let uid: &str = &uid;
+                let span = tracing::span!(tracing::Level::INFO, "", sync = uid);
                 let f = async move {
                     let r = syncer.run(&mut rx).await;
                     if let Err(e) = r {
@@ -494,9 +517,6 @@ impl Handler {
             }
         }
     }
-
-    
-
 }
 
 pub struct Service {
@@ -505,7 +525,6 @@ pub struct Service {
 }
 
 impl Service {
-
     pub fn id(&self) -> &str {
         &self.service.inner().local.uid
     }
@@ -528,7 +547,7 @@ impl Service {
         } else {
             "".to_string()
         };
-    
+
         let mut server = zrpc::Server::builder().build();
         server.server_mut().bind(addr).await?;
 
@@ -539,24 +558,24 @@ impl Service {
 
         let server = Arc::new(server);
         server.add_service(service.clone());
-        
+
         let server0 = server.clone();
-        let f  = async move {
+        let f = async move {
             server0.server().run().await;
         };
         let span = tracing::span!(tracing::Level::INFO, "cluster");
         tokio::spawn(Instrument::instrument(f, span));
-        
 
         if !seed.is_empty() {
             service.inner().kick_seed(&seed).await?;
         }
-    
-        Ok(Self{service, local_addr})
+
+        Ok(Self {
+            service,
+            local_addr,
+        })
     }
 }
-
-
 
 // pub async fn launch(uid: &str, addr: &str, seed: &str) -> core::result::Result<(), Box<dyn std::error::Error>> {
 //     info!("local: node_id = [{}], seed = [{}]", uid, seed);

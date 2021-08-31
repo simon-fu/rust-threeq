@@ -834,20 +834,22 @@ async fn launch_sub_service(args: &Config) -> core::result::Result<(), Box<dyn s
 async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
     info!("channel type: [{}]", hub::bc_channel_type_name());
 
-    let r = clustee::Service::launch(
-        &cfg.node_id, 
-        &cfg.cluster_listen_addr, 
-        &cfg.seed
-    ).await;
+    let r = clustee::Service::launch(&cfg.node_id, &cfg.cluster_listen_addr, &cfg.seed).await;
     if let Err(e) = r {
         return Err(Box::new(e));
     }
     let cluster = r.unwrap();
-    
 
-    let reg = Registry{ cluster, hubs: Default::default() };
+    let reg = Registry {
+        cluster,
+        hubs: Default::default(),
+    };
     registry::set(reg);
-    info!("cluster service at [{}], id [{}]", registry::get().cluster.local_addr(), registry::get().cluster.id());
+    info!(
+        "cluster service at [{}], id [{}]",
+        registry::get().cluster.local_addr(),
+        registry::get().cluster.id()
+    );
 
     //launch_sub_service(cfg).await?;
 

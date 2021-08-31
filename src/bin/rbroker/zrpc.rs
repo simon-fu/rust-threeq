@@ -15,8 +15,6 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use prost::Message;
-use tracing::trace;
-use tracing::warn;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::net::AddrParseError;
@@ -35,6 +33,8 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tracing::debug;
 use tracing::error;
+use tracing::trace;
+use tracing::warn;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -369,7 +369,12 @@ impl zserver::SessionFactory<Session> for Factory {
 pub trait Service: Send + Sync {
     fn type_name(&self) -> &'static str;
 
-    async fn handle_request(&self, session: &Session, ptype: i32, bytes: Bytes) -> Result<(i32, Bytes), String>;
+    async fn handle_request(
+        &self,
+        session: &Session,
+        ptype: i32,
+        bytes: Bytes,
+    ) -> Result<(i32, Bytes), String>;
 
     fn session_finish_with_error(&self, e: std::io::Error) {
         debug!("session finish with {:?}", e);
@@ -770,7 +775,6 @@ impl Client {
     }
 
     pub async fn watch(&mut self, watcher: Box<dyn ClientWatcher>) -> Result<(), Error> {
-
         if let Some(work) = self.work.as_mut() {
             work.watcher = Some(watcher);
         } else {
@@ -784,7 +788,7 @@ impl Client {
     }
 
     // pub async fn connect<A: net::ToSocketAddrs>(&mut self, addr: &A) -> Result<(), Error> {
-        // let socket = TcpStream::connect(&addr).await?;
+    // let socket = TcpStream::connect(&addr).await?;
     pub async fn connect(&mut self, addr: &str) -> Result<(), Error> {
         // let sock_addr: std::net::SocketAddr = addr.parse()?;
         let r = TcpStream::connect(&addr).await;
@@ -867,5 +871,3 @@ impl Client {
         Ok(CallFuture::new(rx))
     }
 }
-
-

@@ -2,11 +2,11 @@
 // use super::zutil;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use tracing::Instrument;
 use std::slice::Iter;
 use std::{marker::PhantomData, net::SocketAddr, sync::Arc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tracing::Instrument;
 
 pub fn decode_packet(
     ibuf: &mut BytesMut,
