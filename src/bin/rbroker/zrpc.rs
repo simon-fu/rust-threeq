@@ -15,8 +15,11 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use prost::Message;
+use tracing::trace;
+use tracing::warn;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::net::AddrParseError;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -25,7 +28,6 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
-use tokio::net;
 use tokio::net::tcp::WriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -47,6 +49,12 @@ pub enum Error {
 
     #[error("{0}")]
     IoError(#[from] std::io::Error),
+
+    #[error("{0}, {1}")]
+    ConnectError(String, std::io::Error),
+
+    #[error("{0}")]
+    AddrParseError(#[from] AddrParseError),
 
     #[error("error: {0}")]
     Generic(String),
@@ -175,9 +183,14 @@ where
 pub struct Session {
     services: Services,
     service: Option<Arc<dyn Service>>,
+    remote_addr: std::net::SocketAddr,
 }
 
 impl Session {
+    pub fn remote_addr(&self) -> &std::net::SocketAddr {
+        &self.remote_addr
+    }
+
     async fn process_packet(
         &mut self,
         ptype: i32,
@@ -190,12 +203,12 @@ impl Session {
                 .service
                 .as_ref()
                 .unwrap()
-                .handle_request(ptype, bytes)
+                .handle_request(self, ptype, bytes)
                 .await;
             match r {
                 Ok((ptype, mut bytes)) => {
                     encode_buf(ptype, seq, &mut bytes, obuf);
-                    debug!("server: => seq {}, ptype {:?}", seq, ptype);
+                    trace!("server: => seq {}, ptype {:?}", seq, ptype);
                     return Ok(zserver::Action::None);
                 }
                 Err(e) => {
@@ -209,7 +222,7 @@ impl Session {
             msg::HELLOREQUEST_ID => {
                 //msg::MessageType::HelloReq => {
                 let pkt = msg::HelloRequest::decode(&mut bytes)?;
-                debug!("server: <= seq {}, {:?}", seq, pkt);
+                trace!("server: <= seq {}, {:?}", seq, pkt);
                 if pkt.magic != MAGIC {
                     return Err(Error::Generic(format!("unexpect magic {}", pkt.magic)));
                 }
@@ -224,25 +237,25 @@ impl Session {
                     } else {
                         reply.code = msg::ErrorType::NotFoundService as i32;
                         reply.msg = format!("Not found service {}", pkt.service_type_name);
-                        debug!("{}", reply.msg);
+                        warn!("{}", reply.msg);
                     }
                 }
 
                 encode_msg(seq, &reply, obuf)?;
-                debug!("server: => seq {}, {:?}", seq, reply);
+                trace!("server: => seq {}, {:?}", seq, reply);
             }
             msg::PINGREQUEST_ID => {
                 // msg::MessageType::Ping => {
                 let pkt = msg::PingRequest::decode(&mut bytes)?;
-                debug!("server: <= seq {}, {:?}", seq, pkt);
+                trace!("server: <= seq {}, {:?}", seq, pkt);
                 let reply = msg::PongReply::default();
                 encode_msg(seq, &reply, obuf)?;
-                debug!("server: => seq {}, {:?}", seq, reply);
+                trace!("server: => seq {}, {:?}", seq, reply);
             }
             msg::BYEREQUEST_ID => {
                 // msg::MessageType::ByeReq => {
                 let pkt = msg::ByeRequest::decode(&mut bytes)?;
-                debug!("server: <= seq {}, {:?}", seq, pkt);
+                trace!("server: <= seq {}, {:?}", seq, pkt);
                 if self.service.is_some() {
                     self.service
                         .as_ref()
@@ -254,13 +267,13 @@ impl Session {
                 if seq > 0 {
                     let reply = msg::ByeReply::default();
                     encode_msg(seq, &reply, obuf)?;
-                    debug!("server: => seq {}, {:?}", seq, reply);
+                    trace!("server: => seq {}, {:?}", seq, reply);
                 } else {
                     return Ok(zserver::Action::Close);
                 }
             }
             _ => {
-                debug!("server: <= ptype {:?}", ptype);
+                trace!("server: <= ptype {:?}", ptype);
                 return Err(Error::Generic(format!("unexpect packet {:?}", ptype)));
             }
         }
@@ -314,17 +327,23 @@ impl Server {
         Self::new()
     }
 
-    pub fn add_service(self, svc: Arc<dyn Service>) -> Self {
-        {
-            let mut services = self.services.write().unwrap();
-            services.insert(svc.type_name().to_string(), svc);
-        }
+    pub fn build(mut self) -> Self {
+        let f = Factory::new(self.services.clone());
+        self.server = self.server.factory(f).build();
         self
     }
 
-    pub fn build(self) -> zserver::Server<Session, Factory> {
-        let f = Factory::new(self.services.clone());
-        self.server.factory(f).build()
+    pub fn server_mut(&mut self) -> &mut zserver::Server<Session, Factory> {
+        &mut self.server
+    }
+
+    pub fn server(&self) -> &zserver::Server<Session, Factory> {
+        &self.server
+    }
+
+    pub fn add_service(&self, svc: Arc<dyn Service>) {
+        let mut services = self.services.write().unwrap();
+        services.insert(svc.type_name().to_string(), svc);
     }
 }
 
@@ -336,11 +355,12 @@ impl zserver::SessionFactory<Session> for Factory {
     fn make_session(
         &self,
         _socket: &tokio::net::TcpStream,
-        _addr: &std::net::SocketAddr,
+        addr: &std::net::SocketAddr,
     ) -> Session {
         Session {
             service: None,
             services: self.services.clone(),
+            remote_addr: addr.clone(),
         }
     }
 }
@@ -349,14 +369,14 @@ impl zserver::SessionFactory<Session> for Factory {
 pub trait Service: Send + Sync {
     fn type_name(&self) -> &'static str;
 
-    async fn handle_request(&self, ptype: i32, bytes: Bytes) -> Result<(i32, Bytes), String>;
+    async fn handle_request(&self, session: &Session, ptype: i32, bytes: Bytes) -> Result<(i32, Bytes), String>;
 
     fn session_finish_with_error(&self, e: std::io::Error) {
         debug!("session finish with {:?}", e);
     }
 
     async fn handle_bye(&self, code: i32, msg: &str) {
-        debug!("session bye with [{:?}]-[{}]", code, msg);
+        trace!("session bye with [{:?}]-[{}]", code, msg);
     }
 }
 
@@ -414,6 +434,7 @@ struct Pending {
 }
 
 enum Command {
+    Watch(Box<dyn ClientWatcher>, oneshot::Sender<()>),
     Call(Request),
     Shutdown(oneshot::Sender<()>),
     Close(oneshot::Sender<()>),
@@ -462,7 +483,7 @@ impl ClientWork {
             let pkt = msg::PingRequest::default();
             let seq = self.next_seq();
             encode_msg(seq, &pkt, &mut self.obuf)?;
-            debug!("client: => seq {}, {:?}", seq, pkt);
+            trace!("client: => seq {}, {:?}", seq, pkt);
             self.pingable = false;
             return Ok(true);
         } else {
@@ -508,15 +529,15 @@ impl ClientWork {
                         // rpc::MessageType::Pong => {
                         self.calc_next_ping_time();
                         let pkt = msg::PongReply::decode(&mut bytes)?;
-                        debug!("client: <= seq {}, {:?}", seq, pkt);
+                        trace!("client: <= seq {}, {:?}", seq, pkt);
                     }
                     msg::BYEREPLY_ID => {
                         // rpc::MessageType::ByeRly => {
                         let pkt = msg::ByeReply::decode(&mut bytes)?;
-                        debug!("client: <= seq {}, {:?}", seq, pkt);
+                        trace!("client: <= seq {}, {:?}", seq, pkt);
                     }
                     _ => {
-                        debug!("client: <= seq {}, ptype {}", seq, ptype);
+                        trace!("client: <= seq {}, ptype {}", seq, ptype);
                         return Err(Error::Generic(format!("unexpect packet {:?}", ptype)));
                     }
                 }
@@ -527,11 +548,15 @@ impl ClientWork {
 
     async fn handle_command(&mut self, cmd: Command, wr: &mut WriteHalf<'_>) -> Result<(), Error> {
         match cmd {
+            Command::Watch(watcher, tx) => {
+                self.watcher = Some(watcher);
+                let _r = tx.send(());
+            }
             Command::Call(mut r) => {
                 let seq = self.next_seq();
                 encode_buf(r.ptype, seq, &mut r.bytes, &mut self.obuf);
                 let pending = Pending { tx: r.tx };
-                debug!("client: => seq {}, ptype {}", seq, r.ptype);
+                trace!("client: => seq {}, ptype {}", seq, r.ptype);
                 self.inflight.insert(seq, pending);
             }
             Command::Shutdown(tx) => {
@@ -698,7 +723,7 @@ impl<M: Message + Default + Unpin> futures::Future for CallFuture<M> {
             Poll::Ready(Ok(r)) => match r {
                 Response::Reply(mut r) => {
                     let reply = M::decode(&mut r.1)?;
-                    debug!("client: <= seq {}, {:?}", r.0, reply);
+                    trace!("client: <= seq {}, {:?}", r.0, reply);
                     Poll::Ready(Ok(reply))
                 }
             },
@@ -735,18 +760,38 @@ impl Client {
         self
     }
 
-    pub fn watcher(mut self, watcher: Box<dyn ClientWatcher>) -> Self {
-        self.work.as_mut().unwrap().watcher = Some(watcher);
-        self
-    }
+    // pub fn watcher(mut self, watcher: Box<dyn ClientWatcher>) -> Self {
+    //     self.work.as_mut().unwrap().watcher = Some(watcher);
+    //     self
+    // }
 
     pub fn build(self) -> Self {
         self
     }
 
-    pub async fn connect<A: net::ToSocketAddrs>(&mut self, addr: A) -> Result<(), Error> {
-        let socket = TcpStream::connect(&addr).await?;
+    pub async fn watch(&mut self, watcher: Box<dyn ClientWatcher>) -> Result<(), Error> {
 
+        if let Some(work) = self.work.as_mut() {
+            work.watcher = Some(watcher);
+        } else {
+            let (tx, rx) = oneshot::channel();
+            let r = self.tx.send(Command::Watch(watcher, tx)).await;
+            if r.is_ok() {
+                rx.await?;
+            }
+        }
+        Ok(())
+    }
+
+    // pub async fn connect<A: net::ToSocketAddrs>(&mut self, addr: &A) -> Result<(), Error> {
+        // let socket = TcpStream::connect(&addr).await?;
+    pub async fn connect(&mut self, addr: &str) -> Result<(), Error> {
+        // let sock_addr: std::net::SocketAddr = addr.parse()?;
+        let r = TcpStream::connect(&addr).await;
+        if let Err(e) = r {
+            return Err(Error::ConnectError(addr.into(), e));
+        }
+        let socket = r.unwrap();
         let mut work = self.work.take().unwrap();
 
         let mut hello = msg::HelloRequest::default();
@@ -758,16 +803,16 @@ impl Client {
             let r = work.run(socket).await;
             match r {
                 Ok(_r) => {
-                    debug!("work finished");
+                    // debug!("work finished");
                 }
                 Err(e) => {
-                    debug!("work finished with {:?}", e);
+                    warn!("work finished with {:?}", e);
                 }
             }
         });
 
         // let reply: msg::HelloReply = self.call(hello).await?.await?;
-        let r: CallFuture<msg::HelloReply> = self.call(hello).await?;
+        let r: CallFuture<msg::HelloReply> = self.call(&hello).await?;
         let reply = r.await?;
 
         if reply.magic != MAGIC {
@@ -802,7 +847,7 @@ impl Client {
         }
     }
 
-    pub async fn call<M1, M2>(&mut self, msg: M1) -> Result<CallFuture<M2>, Error>
+    pub async fn call<M1, M2>(&mut self, msg: &M1) -> Result<CallFuture<M2>, Error>
     where
         M1: Id32 + Message,
         M2: Id32 + Message + Default,
@@ -816,9 +861,11 @@ impl Client {
             tx: Some(tx),
         };
 
-        debug!("client: => seq {}, ptype {}, {:?}", 0, msg.id(), msg);
+        trace!("client: => seq {}, ptype {}, {:?}", 0, msg.id(), msg);
         let _r = self.tx.send(Command::Call(req)).await;
 
         Ok(CallFuture::new(rx))
     }
 }
+
+

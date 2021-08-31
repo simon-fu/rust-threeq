@@ -6,19 +6,32 @@ message NodeInfo {
     repeated string addrs = 2;
 }
 
-message NodeSyncRequest {
+message FullSyncRequest {
     string uid = 1;
     repeated NodeInfo nodes = 2;
     int32 port = 3;
     string your_active_addr = 4;
+    string src = 5;
+    uint64 data_ver = 6;
 }
 
-message NodeSyncReply {
+message FullSyncReply {
     string uid = 1;
     string your_reflex_addr = 2;
     repeated NodeInfo nodes = 3;
 }
 
+message DeltaSyncRequest {
+    repeated NodeInfo nodes = 1;
+    string src = 2;
+    uint64 data_ver = 3;
+}
+
+message DeltaSyncReply {
+    int32 code = 1;
+    string msg = 2;
+}
+
 service Discovery {
-    rpc sync_nodes (NodeSyncRequest) returns (NodeSyncReply);
+    rpc sync_nodes (FullSyncRequest) returns (DeltaSyncReply);
 }

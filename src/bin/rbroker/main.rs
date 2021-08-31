@@ -11,7 +11,7 @@ TODO:
 - support local disk storage
 */
 
-use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use clap::Clap;
@@ -761,7 +761,7 @@ impl Session {
 }
 
 async fn launch_sub_service(args: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
-    let addr: SocketAddr = args.cluster_listen_addr.parse().unwrap();
+    let addr: std::net::SocketAddr = args.cluster_listen_addr.parse().unwrap();
     let node_id = if !args.node_id.is_empty() && args.node_id != " " {
         args.node_id.clone()
     } else {
@@ -834,10 +834,25 @@ async fn launch_sub_service(args: &Config) -> core::result::Result<(), Box<dyn s
 async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
     info!("channel type: [{}]", hub::bc_channel_type_name());
 
-    launch_sub_service(cfg).await?;
+    let r = clustee::Service::launch(
+        &cfg.node_id, 
+        &cfg.cluster_listen_addr, 
+        &cfg.seed
+    ).await;
+    if let Err(e) = r {
+        return Err(Box::new(e));
+    }
+    let cluster = r.unwrap();
+    
+
+    let reg = Registry{ cluster, hubs: Default::default() };
+    registry::set(reg);
+    info!("cluster service at [{}], id [{}]", registry::get().cluster.local_addr(), registry::get().cluster.id());
+
+    //launch_sub_service(cfg).await?;
 
     let listener = TcpListener::bind(&cfg.tcp_listen_addr).await?;
-    info!("mqtt tcp broker listening on {}", cfg.tcp_listen_addr);
+    info!("mqtt tcp service at [{:?}]", listener.local_addr().unwrap());
 
     SESSION_GAUGE.set(0);
     // let hub = Arc::new(hub::Hub::default());
@@ -876,6 +891,8 @@ async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error
 use actix_web::{get, HttpResponse, Responder};
 use prometheus::{Encoder, TextEncoder};
 
+use crate::registry::Registry;
+
 // Register & measure some metrics.
 lazy_static::lazy_static! {
     static ref SESSION_GAUGE: prometheus::IntGauge =
@@ -901,8 +918,9 @@ async fn async_main() -> std::io::Result<()> {
     let cfg = Config::parse();
     info!("cfg={:?}", cfg);
 
+    // TODO: remove this
     if cfg.enable_gc {
-        clustee::run().await; // TODO: remove this
+        let _r = launch_sub_service(&cfg).await;
     }
 
     let tokio_h = tokio::spawn(async move {
@@ -913,18 +931,18 @@ async fn async_main() -> std::io::Result<()> {
             }
         }
     });
-    // let _r = tokio_h.await;
+    let _r = tokio_h.await;
 
-    let actix_h = actix_web::HttpServer::new(|| actix_web::App::new().service(metrics))
-        .workers(1)
-        .bind("127.0.0.1:8080")
-        .expect("Couldn't bind to 127.0.0.1:8080")
-        .run();
+    // let actix_h = actix_web::HttpServer::new(|| actix_web::App::new().service(metrics))
+    //     .workers(1)
+    //     .bind("127.0.0.1:8080")
+    //     .expect("Couldn't bind to 127.0.0.1:8080")
+    //     .run();
 
-    match futures::future::select(tokio_h, actix_h).await {
-        futures::future::Either::Left(_r) => {}
-        futures::future::Either::Right(_r) => {}
-    }
+    // match futures::future::select(tokio_h, actix_h).await {
+    //     futures::future::Either::Left(_r) => {}
+    //     futures::future::Either::Right(_r) => {}
+    // }
 
     Ok(())
 }

@@ -2,10 +2,11 @@
 // use super::zutil;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use tracing::Instrument;
 use std::slice::Iter;
 use std::{marker::PhantomData, net::SocketAddr, sync::Arc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{self, TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream};
 
 pub fn decode_packet(
     ibuf: &mut BytesMut,
@@ -86,28 +87,46 @@ impl<S: Send + Session + 'static, F: SessionFactory<S>> Server<S, F> {
         self
     }
 
-    pub async fn bind<A: net::ToSocketAddrs>(mut self, addr: A) -> std::io::Result<Self> {
-        self.listener = Some(TcpListener::bind(&addr).await?);
-        Ok(self)
-    }
-
     pub fn build(self) -> Self {
         self
     }
 
-    pub async fn run(self) {
+    pub async fn bind(&mut self, addr: &str) -> std::io::Result<()> {
+        let r = TcpListener::bind(&addr).await;
+        if let Err(e) = r {
+            let e = std::io::Error::new(e.kind(), format!("{}, address {}", e.to_string(), addr));
+            return Err(e);
+        }
+        self.listener = Some(r.unwrap());
+        Ok(())
+    }
+
+    pub fn local_addr(&self) -> Option<SocketAddr> {
+        if let Some(listener) = &self.listener {
+            let r = listener.local_addr();
+            if let Ok(addr) = r {
+                return Some(addr);
+            }
+        }
+        return None;
+    }
+
+    pub async fn run(&self) {
         let cfg = Arc::new(*self.cfg.clone());
         loop {
             let listener = self.listener.as_ref().unwrap();
             let (mut socket, addr) = listener.accept().await.expect("something wrong");
             let mut session = self.factory.as_ref().unwrap().make_session(&socket, &addr);
             let cfg0 = cfg.clone();
-            tokio::spawn(async move {
+            let f = async move {
                 let r = conn_entry(&mut socket, &mut session, cfg0).await;
                 if let Err(e) = r {
                     session.handle_final_error(e);
                 }
-            });
+            };
+            let span = tracing::span!(tracing::Level::INFO, "");
+            tokio::spawn(Instrument::instrument(f, span));
+            // tokio::spawn(f);
         }
     }
 }
