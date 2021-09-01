@@ -1,4 +1,5 @@
 // TODO:
+// - ping timeout
 // - rpc timeout
 // - client.call type safe, only allow the message belone to the specifc service
 // - client state machine, retry

@@ -29,7 +29,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-mod clustee;
+mod discovery;
 mod hub;
 mod registry;
 mod znodes;
@@ -762,21 +762,21 @@ impl Session {
 async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
     info!("channel type: [{}]", hub::bc_channel_type_name());
 
-    let r = clustee::Service::launch(&cfg.node_id, &cfg.cluster_listen_addr, &cfg.seed).await;
+    let r = discovery::Service::launch(&cfg.node_id, &cfg.cluster_listen_addr, &cfg.seed).await;
     if let Err(e) = r {
         return Err(Box::new(e));
     }
-    let cluster = r.unwrap();
+    let discovery = r.unwrap();
 
     let reg = Registry {
-        cluster,
-        hubs: Default::default(),
+        discovery,
+        tenants: Default::default(),
     };
     registry::set(reg);
     info!(
         "cluster service at [{}], id [{}]",
-        registry::get().cluster.local_addr(),
-        registry::get().cluster.id()
+        registry::get().discovery.local_addr(),
+        registry::get().discovery.id()
     );
 
     //launch_sub_service(cfg).await?;

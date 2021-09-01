@@ -1,15 +1,24 @@
-use std::{collections::HashMap, sync::RwLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use once_cell::sync::OnceCell;
 
-use crate::clustee;
+use crate::discovery;
 
 use super::hub::Hub;
 
+#[derive(Debug)]
+pub struct Tenant {
+    pub uid: String,
+    pub hub: Hub,
+}
+
 // #[derive(Default)]
 pub struct Registry {
-    pub hubs: RwLock<HashMap<String, Hub>>,
-    pub cluster: clustee::Service,
+    pub tenants: RwLock<HashMap<String, Arc<Tenant>>>,
+    pub discovery: discovery::Service,
 }
 
 impl std::fmt::Debug for Registry {
