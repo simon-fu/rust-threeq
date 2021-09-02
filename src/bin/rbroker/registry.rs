@@ -5,7 +5,7 @@ use std::{
 
 use once_cell::sync::OnceCell;
 
-use crate::discovery;
+// use crate::discovery;
 
 use super::hub::Hub;
 
@@ -18,7 +18,7 @@ pub struct Tenant {
 // #[derive(Default)]
 pub struct Registry {
     pub tenants: RwLock<HashMap<String, Arc<Tenant>>>,
-    pub discovery: discovery::Service,
+    // pub discovery: discovery::Service,
 }
 
 impl std::fmt::Debug for Registry {

@@ -1,8 +1,9 @@
 // TODO:
 // - ping timeout
 // - rpc timeout
-// - client.call type safe, only allow the message belone to the specifc service
 // - client state machine, retry
+// - only allow the message belone to the specifc service
+// done - client.call type safe
 // done - client.call return future
 // done - client request close request to server
 //
@@ -97,10 +98,26 @@ macro_rules! define_msgs {
         };
     }
 
+#[macro_export]
+macro_rules! define_msg_pair {
+    ($id1:ident, $id2:ident) => {
+        impl MPair for $id1 {
+            type Request = $id1;
+            type Reply = $id2;
+        }
+    };
+}
+
+pub trait MPair {
+    type Request: Id32 + Message;
+    type Reply: Id32 + Message + Default;
+}
+
 mod msg {
     include!(concat!(env!("OUT_DIR"), "/zrpc.rs"));
 
     use super::Id32;
+    use super::MPair;
     use paste::paste;
     define_msgs_!(
         1,
@@ -111,6 +128,9 @@ mod msg {
         ByeRequest,
         ByeReply
     );
+    define_msg_pair!(HelloRequest, HelloReply);
+    define_msg_pair!(PingRequest, PongReply);
+    define_msg_pair!(ByeRequest, ByeReply);
 }
 
 #[inline]
@@ -817,7 +837,7 @@ impl Client {
         });
 
         // let reply: msg::HelloReply = self.call(hello).await?.await?;
-        let r: CallFuture<msg::HelloReply> = self.call(&hello).await?;
+        let r = self.call(&hello).await?;
         let reply = r.await?;
 
         if reply.magic != MAGIC {
@@ -852,11 +872,10 @@ impl Client {
         }
     }
 
-    pub async fn call<M1, M2>(&mut self, msg: &M1) -> Result<CallFuture<M2>, Error>
-    where
-        M1: Id32 + Message,
-        M2: Id32 + Message + Default,
-    {
+    pub async fn call<M: MPair + Id32 + Message>(
+        &mut self,
+        msg: &M,
+    ) -> Result<CallFuture<M::Reply>, Error> {
         let mut obuf = BytesMut::new();
         msg.encode(&mut obuf)?;
         let (tx, rx) = oneshot::channel();

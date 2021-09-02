@@ -72,16 +72,26 @@ use tracing::{debug, error, info, trace, warn};
 //     }
 // }
 
+pub type NodeId = u32;
+
+// #[derive(Debug, Default, Clone)]
+// struct NodeId(u32);
+// impl NodeId {
+//     fn inner(self) -> u32 {
+//         self.0
+//     }
+// }
+
 #[derive(Default)]
 struct Delta {
-    data: HashMap<String, NodeInfo>,
+    data: HashMap<NodeId, NodeInfo>,
     ver: u64,
-    src: String,
+    src: NodeId,
 }
 
 #[derive(Default, Clone)]
 struct Nodes {
-    data: HashMap<String, NodeInfo>,
+    data: HashMap<NodeId, NodeInfo>,
     ver: u64,
 }
 
@@ -109,13 +119,13 @@ impl Nodes {
         return false;
     }
 
-    fn merge_addr(&mut self, uid: &str, addr: String, delta: &mut Delta) -> bool {
+    fn merge_addr(&mut self, uid: &NodeId, addr: String, delta: &mut Delta) -> bool {
         let mut is_add_node = false;
         if !self.data.contains_key(uid) {
             let mut node = NodeInfo::default();
-            node.uid = uid.to_string();
+            node.uid = uid.clone();
             //debug!("merge_addr: add node {}", uid);
-            self.data.insert(uid.to_string(), node);
+            self.data.insert(uid.clone(), node);
             is_add_node = true;
         }
 
@@ -139,17 +149,25 @@ struct SeqData {
 }
 
 impl SeqData {
+    fn new(uid: NodeId) -> Self {
+        let mut info = NodeInfo::default();
+        info.uid = uid;
+        let mut self0: SeqData = Default::default();
+        self0.nodes.data.insert(info.uid.clone(), info);
+        self0
+    }
+
     fn merge_full(
         &mut self,
-        local_uid: &str,
+        local_uid: &NodeId,
         req: FullSyncRequest,
         addr: String,
-    ) -> (u64, Option<HashSet<String>>) {
-        if req.src == local_uid {
+    ) -> (u64, Option<HashSet<NodeId>>) {
+        if req.src == *local_uid {
             return (self.nodes.ver, None);
         }
 
-        let mut uids: HashSet<String> = HashSet::default();
+        let mut uids: HashSet<NodeId> = HashSet::default();
         let mut delta = Delta::default();
         let nodes = &mut self.nodes;
         for info in &req.nodes {
@@ -177,14 +195,14 @@ impl SeqData {
 
     fn merge_delta(
         &mut self,
-        local_uid: &str,
+        local_uid: &NodeId,
         req: DeltaSyncRequest,
-    ) -> (Option<u64>, Option<HashSet<String>>) {
-        if req.src == local_uid {
+    ) -> (Option<u64>, Option<HashSet<NodeId>>) {
+        if req.src == *local_uid {
             return (None, None);
         }
 
-        let mut uids: HashSet<String> = HashSet::default();
+        let mut uids: HashSet<NodeId> = HashSet::default();
         let mut delta = Delta::default();
         let nodes = &mut self.nodes;
         for info in &req.nodes {
@@ -230,7 +248,7 @@ impl SeqData {
         return Some(self.history[index].clone());
     }
 
-    fn get_node_addrs(&self, uid: &str) -> Option<Vec<String>> {
+    fn get_node_addrs(&self, uid: &NodeId) -> Option<Vec<String>> {
         let r = self.nodes.data.get(uid);
         if let Some(info) = r {
             return Some(info.addrs.clone());
@@ -242,18 +260,16 @@ impl SeqData {
 
 #[derive(Default)]
 struct LocalNode {
-    uid: String,
+    uid: NodeId,
     port: i32,
     data: Arc<RwLock<SeqData>>,
 }
 
 impl LocalNode {
-    fn new(uid: String, port: i32) -> Self {
-        Self {
-            uid,
-            port,
-            ..Default::default()
-        }
+    fn new(uid: NodeId, port: i32) -> Self {
+        let data = SeqData::new(uid);
+        let data: Arc<RwLock<SeqData>> = Arc::new(RwLock::new(data));
+        Self { uid, port, data }
     }
 
     async fn build_full_sync(&self) -> FullSyncRequest {
@@ -293,12 +309,13 @@ pub enum Error {
 
     #[error("TryConnectFail")]
     TryConnectFail,
-    // #[error("error: {0}")]
-    // Generic(String),
+
+    #[error("error: {0}")]
+    Generic(String),
 }
 
 struct NodeSyncer {
-    uid: String,
+    uid: NodeId,
     local: Arc<LocalNode>,
     ver: u64,
 }
@@ -329,7 +346,7 @@ impl NodeSyncer {
             let mut req = self.local.build_full_sync().await;
             req.your_active_addr = addr.clone();
             let r = client.call(&req).await?;
-            let _r: FullSyncReply = r.await?;
+            let _r = r.await?;
             self.ver = req.data_ver;
         }
 
@@ -348,14 +365,14 @@ impl NodeSyncer {
             let r = self.local.build_delta_sync(self.ver).await;
             if let Some(req) = r {
                 let r = client.call(&req).await?;
-                let _reply: DeltaSyncReply = r.await?;
+                let _reply = r.await?;
             } else {
                 let mut req = self.local.build_full_sync().await;
                 req.your_active_addr = addr.clone();
                 debug!("out of sync, {} -> {} ", self.ver, req.data_ver);
 
                 let r = client.call(&req).await?;
-                let _reply: FullSyncReply = r.await?;
+                let _reply = r.await?;
                 self.ver = req.data_ver;
             }
         }
@@ -425,16 +442,22 @@ impl znodes::Handler for Handler {
     ) -> FullSyncReply {
         trace!("serivce: <= full sync, {:?}", req);
 
-        let addr = format!("{}:{}", session.remote_addr().ip(), req.port);
-
         let mut data = self.local.data.write().await;
-        let (ver, uids) = data.merge_full(&self.local.uid, req, addr.clone());
-        let _r = self.tx.send(ver); // always kick
-        self.launch_syncers(uids).await;
-
         let mut reply = FullSyncReply::default();
-        reply.uid = self.local.uid.clone();
-        reply.your_reflex_addr = addr.clone();
+
+        if data.nodes.data.contains_key(&req.uid) {
+            reply.code = -1;
+            reply.msg = format!("already exist node {}", req.uid);
+        } else {
+            let addr = format!("{}:{}", session.remote_addr().ip(), req.port);
+            let (ver, uids) = data.merge_full(&self.local.uid, req, addr.clone());
+            let _r = self.tx.send(ver); // always kick
+            self.launch_syncers(uids).await;
+
+            reply.uid = self.local.uid.clone();
+            reply.your_reflex_addr = addr.clone();
+        }
+
         trace!("serivce: => full sync, {:?}", reply);
 
         reply
@@ -461,9 +484,9 @@ impl znodes::Handler for Handler {
 }
 
 impl Handler {
-    fn new<S: Into<String>>(uid: S, port: i32) -> Self {
+    fn new(uid: &NodeId, port: i32) -> Self {
         let (tx, rx) = watch::channel(0);
-        let data = LocalNode::new(uid.into(), port);
+        let data = LocalNode::new(uid.clone(), port);
         Handler {
             tx,
             rx,
@@ -484,13 +507,17 @@ impl Handler {
         req.your_active_addr = addr.to_string();
 
         let r = client.call(&req).await?;
-        let _r: FullSyncReply = r.await?;
+        let reply = r.await?;
         client.close().await;
+
+        if reply.code != 0 {
+            return Err(Error::Generic(reply.msg.clone()));
+        }
 
         Ok(())
     }
 
-    async fn launch_syncers(&self, uids: Option<HashSet<String>>) {
+    async fn launch_syncers(&self, uids: Option<HashSet<NodeId>>) {
         if let Some(uids) = uids {
             for uid in uids {
                 if uid == self.local.uid {
@@ -505,8 +532,8 @@ impl Handler {
                 };
                 let mut rx = self.rx.clone();
 
-                let uid: &str = &uid;
-                let span = tracing::span!(tracing::Level::INFO, "", sync = uid);
+                let uid = &uid;
+                let span = tracing::span!(tracing::Level::INFO, "", sync = &uid);
                 let f = async move {
                     let r = syncer.run(&mut rx).await;
                     if let Err(e) = r {
@@ -525,7 +552,7 @@ pub struct Service {
 }
 
 impl Service {
-    pub fn id(&self) -> &str {
+    pub fn id(&self) -> &NodeId {
         &self.service.inner().local.uid
     }
 
@@ -533,15 +560,9 @@ impl Service {
         &self.local_addr
     }
 
-    pub async fn launch(uid: &str, addr: &str, seed: &str) -> Result<Self, Error> {
-        let uid = uid.trim();
+    pub async fn launch(uid: &NodeId, addr: &str, seed: &str) -> Result<Self, Error> {
         let seed = seed.trim();
 
-        let uid = if !uid.is_empty() {
-            uid.to_string()
-        } else {
-            mac_address::get_mac_address().unwrap().unwrap().to_string()
-        };
         let seed = if !seed.is_empty() {
             seed.to_string()
         } else {
@@ -583,7 +604,7 @@ impl Service {
 //     let r = Service::launch(uid, addr, seed).await;
 //     match r {
 //         Ok(service) => {
-//             info!("cluster service at {}, id [{}]", service.local_addr(), service.id());
+//             info!("discovery service at {}, id [{}]", service.local_addr(), service.id());
 //             tokio::time::sleep(Duration::from_secs(999999)).await;
 //             Ok(())
 //         },

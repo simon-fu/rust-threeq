@@ -2,28 +2,30 @@ syntax = "proto3";
 package znodes;
 
 message NodeInfo {
-    string uid = 1;
+    uint32 uid = 1;
     repeated string addrs = 2;
 }
 
 message FullSyncRequest {
-    string uid = 1;
+    uint32 uid = 1;
     repeated NodeInfo nodes = 2;
     int32 port = 3;
     string your_active_addr = 4;
-    string src = 5;
+    uint32 src = 5;
     uint64 data_ver = 6;
 }
 
 message FullSyncReply {
-    string uid = 1;
-    string your_reflex_addr = 2;
-    repeated NodeInfo nodes = 3;
+    int32 code = 1;
+    string msg = 2;
+    uint32 uid = 3;
+    string your_reflex_addr = 4;
+    repeated NodeInfo nodes = 5;
 }
 
 message DeltaSyncRequest {
     repeated NodeInfo nodes = 1;
-    string src = 2;
+    uint32 src = 2;
     uint64 data_ver = 3;
 }
 

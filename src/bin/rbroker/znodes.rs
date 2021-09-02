@@ -3,19 +3,26 @@ use bytes::Bytes;
 use std::sync::Arc;
 
 use super::zrpc;
+use crate::define_msg_pair;
 use crate::define_msgs;
 use crate::define_msgs_;
 use paste::paste;
 use zrpc::Id32;
+use zrpc::MPair;
 use zrpc::MESSAGE_ID_BASE;
 
-include!(concat!(env!("OUT_DIR"), "/znodes.rs"));
+mod msg {
+    include!(concat!(env!("OUT_DIR"), "/znodes.rs"));
+}
+pub use msg::{DeltaSyncReply, DeltaSyncRequest, FullSyncReply, FullSyncRequest, NodeInfo};
 define_msgs!(
     FullSyncRequest,
     FullSyncReply,
     DeltaSyncRequest,
     DeltaSyncReply
 );
+define_msg_pair!(FullSyncRequest, FullSyncReply);
+define_msg_pair!(DeltaSyncRequest, DeltaSyncReply);
 
 #[async_trait]
 pub trait Handler {

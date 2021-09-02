@@ -76,8 +76,8 @@ struct Config {
     )]
     enable_gc: bool,
 
-    #[clap(long = "node", long_about = "this node id", default_value = " ")]
-    node_id: String,
+    #[clap(long = "node", long_about = "this node id", default_value = "0")]
+    node_id: discovery::NodeId,
 
     #[clap(long = "seed", long_about = "seed node address", default_value = " ")]
     seed: String,
@@ -762,22 +762,26 @@ impl Session {
 async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error::Error>> {
     info!("channel type: [{}]", hub::bc_channel_type_name());
 
-    let r = discovery::Service::launch(&cfg.node_id, &cfg.cluster_listen_addr, &cfg.seed).await;
-    if let Err(e) = r {
-        return Err(Box::new(e));
+    if cfg.node_id > 0 {
+        let r = discovery::Service::launch(&cfg.node_id, &cfg.cluster_listen_addr, &cfg.seed).await;
+        if let Err(e) = r {
+            return Err(Box::new(e));
+        }
+        let discovery = r.unwrap();
+        info!(
+            "cluster service at [{}], id [{}]",
+            discovery.local_addr(),
+            discovery.id()
+        );
+    } else {
+        info!("standalone mode");
     }
-    let discovery = r.unwrap();
 
     let reg = Registry {
-        discovery,
         tenants: Default::default(),
     };
     registry::set(reg);
-    info!(
-        "cluster service at [{}], id [{}]",
-        registry::get().discovery.local_addr(),
-        registry::get().discovery.id()
-    );
+    registry::get();
 
     //launch_sub_service(cfg).await?;
 
