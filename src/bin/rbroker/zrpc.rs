@@ -257,7 +257,7 @@ impl Session {
                         reply.code = 0;
                     } else {
                         reply.code = msg::ErrorType::NotFoundService as i32;
-                        reply.msg = format!("Not found service {}", pkt.service_type_name);
+                        reply.msg = format!("Not found service [{}]", pkt.service_type_name);
                         warn!("{}", reply.msg);
                     }
                 }
@@ -593,6 +593,7 @@ impl ClientWork {
                 let pkt = msg::ByeRequest::default();
                 encode_msg(0, &pkt, &mut self.obuf)?;
                 wr.write_all_buf(&mut self.obuf).await?;
+                self.finished = true;
                 let _r = tx.send(());
             }
         }
@@ -723,7 +724,7 @@ pub enum Reason {
 }
 
 #[async_trait]
-pub trait ClientWatcher: Send {
+pub trait ClientWatcher: Send + Sync {
     async fn on_disconnect(&mut self, reason: Reason, detail: &Error);
 }
 
@@ -873,7 +874,7 @@ impl Client {
     }
 
     pub async fn call<M: MPair + Id32 + Message>(
-        &mut self,
+        &self,
         msg: &M,
     ) -> Result<CallFuture<M::Reply>, Error> {
         let mut obuf = BytesMut::new();

@@ -32,7 +32,7 @@ tokio-stream = { version = "^0.1.7", features = ["sync"] }
 bytes = "^1.0.1"
 tracing = { version = "^0.1.26", features = ["max_level_trace", "release_max_level_debug"] }
 tracing-subscriber = "^0.2.19"
-clap = "3.0.0-beta.2"
+clap = "=3.0.0-beta.2"
 ntex-mqtt = "^0.6.9"
 mqttbytes="^0.4.0" 
 futures="^0.3.15"
@@ -45,7 +45,7 @@ config = { version = "^0.11.0", features = ["hjson"] }
 serde = "^1.0.126"
 serde_derive = "^1.0.126"
 serde_json = "^1.0.65"
-float-cmp = "^0.8.0"
+float-cmp = "0.9.0"
 rand = "^0.8.4"
 histogram = "^0.6.9"
 bincode = "^1.3.3"
@@ -56,7 +56,7 @@ async-trait = "^0.1.50"
 prometheus = { version = "^0.12.0", features = ["process"] }
 # warp = "^0.3.1"
 reqwest = { version = "^0.11.4", features = ["json"] } 
-actix-web = "4.0.0-beta.8"
+actix-web = "=4.0.0-beta.8"
 # enum-as-inner = "^0.3.3"
 base64 = "^0.13.0"
 
@@ -75,6 +75,10 @@ prost = "0.8.0"
 rust-fsm = "0.6.0"
 paste = "1.0.5"
 once_cell = "1.8.0"
+raft = {version = "0.6.0", default-features=false, features=["prost-codec", "default-logger"]}
+async-raft = "0.6.1"
+anyhow = "1.0.43"
+
 
 [dev-dependencies]
 # criterion = "^0.3.4"

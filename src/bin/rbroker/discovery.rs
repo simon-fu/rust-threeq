@@ -82,6 +82,43 @@ pub type NodeId = u32;
 //     }
 // }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeState {
+    Disconnect,
+    Running,
+}
+
+impl Default for NodeState {
+    fn default() -> Self {
+        NodeState::Disconnect
+    }
+}
+
+#[derive(Default, Clone)]
+struct InnerNode {
+    info: NodeInfo,
+    addr: String,
+    state: NodeState,
+}
+
+impl InnerNode {
+    fn with_info(info: &NodeInfo) -> Self {
+        Self {
+            info: info.clone(),
+            ..Default::default()
+        }
+    }
+
+    fn with_uid(uid: &NodeId) -> Self {
+        let mut info = NodeInfo::default();
+        info.uid = uid.clone();
+        Self {
+            info,
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Default)]
 struct Delta {
     data: HashMap<NodeId, NodeInfo>,
@@ -90,28 +127,29 @@ struct Delta {
 }
 
 #[derive(Default, Clone)]
-struct Nodes {
-    data: HashMap<NodeId, NodeInfo>,
+struct InnerNodes {
+    data: HashMap<NodeId, InnerNode>,
     ver: u64,
 }
 
-impl Nodes {
+impl InnerNodes {
     fn merge_node(&mut self, info: &NodeInfo, delta: &mut Delta) -> bool {
         let exist = self.data.get_mut(&info.uid);
         if exist.is_none() {
             //debug!("merge_node: add node {:?}", info);
-            self.data.insert(info.uid.clone(), info.clone());
+            self.data
+                .insert(info.uid.clone(), InnerNode::with_info(&info));
             delta.data.insert(info.uid.clone(), info.clone());
             return true;
         }
 
         let node = exist.unwrap();
         for addr in &info.addrs {
-            if !node.addrs.contains(addr) {
-                node.addrs.push(addr.clone());
+            if !node.info.addrs.contains(addr) {
+                node.info.addrs.push(addr.clone());
                 let delta_node = delta
                     .data
-                    .entry(node.uid.clone())
+                    .entry(node.info.uid.clone())
                     .or_insert(NodeInfo::default());
                 delta_node.addrs.push(addr.clone());
             }
@@ -122,19 +160,18 @@ impl Nodes {
     fn merge_addr(&mut self, uid: &NodeId, addr: String, delta: &mut Delta) -> bool {
         let mut is_add_node = false;
         if !self.data.contains_key(uid) {
-            let mut node = NodeInfo::default();
-            node.uid = uid.clone();
+            let node = InnerNode::with_uid(uid);
             //debug!("merge_addr: add node {}", uid);
             self.data.insert(uid.clone(), node);
             is_add_node = true;
         }
 
         let node = self.data.get_mut(uid).unwrap();
-        if !node.addrs.contains(&addr) {
-            node.addrs.push(addr.clone());
+        if !node.info.addrs.contains(&addr) {
+            node.info.addrs.push(addr.clone());
             let delta_node = delta
                 .data
-                .entry(node.uid.clone())
+                .entry(node.info.uid.clone())
                 .or_insert(NodeInfo::default());
             delta_node.addrs.push(addr);
         }
@@ -144,16 +181,15 @@ impl Nodes {
 
 #[derive(Default)]
 struct SeqData {
-    nodes: Nodes,
+    nodes: InnerNodes,
     history: VecDeque<Arc<Delta>>,
 }
 
 impl SeqData {
     fn new(uid: NodeId) -> Self {
-        let mut info = NodeInfo::default();
-        info.uid = uid;
+        let node = InnerNode::with_uid(&uid);
         let mut self0: SeqData = Default::default();
-        self0.nodes.data.insert(info.uid.clone(), info);
+        self0.nodes.data.insert(uid, node);
         self0
     }
 
@@ -224,8 +260,8 @@ impl SeqData {
 
     fn get_full(&self) -> (Vec<NodeInfo>, u64) {
         let mut nodes = Vec::new();
-        for (_, info) in &self.nodes.data {
-            nodes.push(info.clone());
+        for (_, node) in &self.nodes.data {
+            nodes.push(node.info.clone());
         }
         return (nodes, self.nodes.ver);
     }
@@ -250,8 +286,8 @@ impl SeqData {
 
     fn get_node_addrs(&self, uid: &NodeId) -> Option<Vec<String>> {
         let r = self.nodes.data.get(uid);
-        if let Some(info) = r {
-            return Some(info.addrs.clone());
+        if let Some(node) = r {
+            return Some(node.info.addrs.clone());
         } else {
             return None;
         }
@@ -400,7 +436,11 @@ impl NodeSyncer {
         return Err(Error::TryConnectFail);
     }
 
-    async fn run(&mut self, delta_rx: &mut watch::Receiver<u64>) -> Result<(), Error> {
+    async fn run(
+        &mut self,
+        delta_rx: &mut watch::Receiver<u64>,
+        node_tx: &mut NodesSender,
+    ) -> Result<(), Error> {
         let mut wait_secs = 1;
         loop {
             let r = self.try_connect().await;
@@ -408,7 +448,24 @@ impl NodeSyncer {
                 Ok((mut client, addr)) => {
                     info!("connected to node [{}], addr [{}]", self.uid, addr);
                     wait_secs = 1; // reset timeout
+                    {
+                        let mut data = self.local.data.write().await;
+                        let r = data.nodes.data.get_mut(&self.uid);
+                        if let Some(node) = r {
+                            node.addr = addr.clone();
+                            node.state = NodeState::Running;
+                        }
+                    }
+                    let _r = node_tx.send(());
                     let _r = self.sync_with_addr(&mut client, &addr, delta_rx).await;
+
+                    {
+                        let mut data = self.local.data.write().await;
+                        let r = data.nodes.data.get_mut(&self.uid);
+                        if let Some(node) = r {
+                            node.state = NodeState::Disconnect;
+                        }
+                    }
                 }
                 Err(_e) => {
                     wait_secs *= 2;
@@ -430,6 +487,7 @@ impl NodeSyncer {
 struct Handler {
     tx: watch::Sender<u64>,
     rx: watch::Receiver<u64>,
+    node_tx: NodesSender,
     local: Arc<LocalNode>,
 }
 
@@ -445,7 +503,16 @@ impl znodes::Handler for Handler {
         let mut data = self.local.data.write().await;
         let mut reply = FullSyncReply::default();
 
-        if data.nodes.data.contains_key(&req.uid) {
+        let mut exist = false;
+        if req.uid == self.local.uid {
+            exist = true;
+        } else if let Some(node) = data.nodes.data.get(&req.uid) {
+            if node.state == NodeState::Running {
+                exist = true;
+            }
+        }
+
+        if exist {
             reply.code = -1;
             reply.msg = format!("already exist node {}", req.uid);
         } else {
@@ -486,10 +553,12 @@ impl znodes::Handler for Handler {
 impl Handler {
     fn new(uid: &NodeId, port: i32) -> Self {
         let (tx, rx) = watch::channel(0);
+        let (node_tx, _rx) = broadcast::channel(1);
         let data = LocalNode::new(uid.clone(), port);
         Handler {
             tx,
             rx,
+            node_tx,
             local: Arc::new(data),
         }
     }
@@ -531,11 +600,12 @@ impl Handler {
                     ver: 0,
                 };
                 let mut rx = self.rx.clone();
+                let mut tx = self.node_tx.clone();
 
                 let uid = &uid;
                 let span = tracing::span!(tracing::Level::INFO, "", sync = &uid);
                 let f = async move {
-                    let r = syncer.run(&mut rx).await;
+                    let r = syncer.run(&mut rx, &mut tx).await;
                     if let Err(e) = r {
                         debug!("node task finished with {:?}", e);
                     }
@@ -546,9 +616,35 @@ impl Handler {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct Node {
+    pub uid: NodeId,
+    pub addr: String,
+    pub state: NodeState,
+}
+
+#[derive(Default, Clone)]
+pub struct Nodes(pub HashMap<NodeId, Node>);
+
+// impl Nodes {
+//     fn sub(&self, other: &Self) -> Vec<NodeId> {
+//         let mut uids = Vec::new();
+//         for (uid, _) in &self.0 {
+//             if !other.0.contains_key(uid) {
+//                 uids.push(uid.clone());
+//             }
+//         }
+//         uids
+//     }
+// }
+
+pub type NodesReceiver = broadcast::Receiver<()>;
+type NodesSender = broadcast::Sender<()>;
+
+#[derive(Clone)]
 pub struct Service {
     service: Arc<znodes::Service<Handler>>,
-    local_addr: SocketAddr,
+    // local_addr: SocketAddr,
 }
 
 impl Service {
@@ -556,46 +652,105 @@ impl Service {
         &self.service.inner().local.uid
     }
 
-    pub fn local_addr(&self) -> &SocketAddr {
-        &self.local_addr
-    }
+    // pub fn local_addr(&self) -> &SocketAddr {
+    //     &self.local_addr
+    // }
 
-    pub async fn launch(uid: &NodeId, addr: &str, seed: &str) -> Result<Self, Error> {
-        let seed = seed.trim();
+    // pub async fn get_nodes(&self) -> Nodes {
+    //     let mut nodes = Nodes::default();
+    //     let data = self.service.inner().local.data.read().await;
+    //     for (uid, v) in &data.nodes.data {
+    //         nodes.0.insert(uid.clone(), Node{uid: uid.clone(), addr: v.addr.clone()});
+    //     }
+    //     nodes
+    // }
 
-        let seed = if !seed.is_empty() {
-            seed.to_string()
-        } else {
-            "".to_string()
-        };
-
-        let mut server = zrpc::Server::builder().build();
-        server.server_mut().bind(addr).await?;
-
-        let local_addr = server.server().local_addr().unwrap();
-        //let handler = Handler::new(uid, sock_addr.port() as i32);
-        let handler = Handler::new(uid, local_addr.port() as i32);
-        let service = znodes::Service::new(handler);
-
-        let server = Arc::new(server);
-        server.add_service(service.clone());
-
-        let server0 = server.clone();
-        let f = async move {
-            server0.server().run().await;
-        };
-        let span = tracing::span!(tracing::Level::INFO, "cluster");
-        tokio::spawn(Instrument::instrument(f, span));
-
-        if !seed.is_empty() {
-            service.inner().kick_seed(&seed).await?;
+    pub async fn nodes_delta(&self, current: &Nodes) -> (Vec<NodeId>, Vec<Node>) {
+        let mut remove_uids = Vec::new();
+        let data = self.service.inner().local.data.read().await;
+        for (uid, _v) in &current.0 {
+            if !data.nodes.data.contains_key(uid) {
+                remove_uids.push(uid.clone());
+            }
         }
 
-        Ok(Self {
-            service,
-            local_addr,
-        })
+        let mut add_nodes = Vec::new();
+        for (uid, v) in &data.nodes.data {
+            if !current.0.contains_key(uid) {
+                if !v.addr.is_empty() {
+                    add_nodes.push(Node {
+                        uid: uid.clone(),
+                        addr: v.addr.clone(),
+                        state: v.state.clone(),
+                    });
+                }
+            }
+        }
+        (remove_uids, add_nodes)
     }
+
+    pub fn watch(&self) -> NodesReceiver {
+        self.service.inner().node_tx.subscribe()
+    }
+
+    pub fn service(&self) -> Arc<dyn zrpc::Service> {
+        self.service.clone()
+    }
+
+    pub fn new(uid: &NodeId, local_addr: &SocketAddr) -> Self {
+        let handler = Handler::new(uid, local_addr.port() as i32);
+        let service = znodes::Service::new(handler);
+        Self {
+            service,
+            // local_addr: local_addr.clone(),
+        }
+    }
+
+    pub async fn kick_seed(&self, seed: &str) -> Result<(), Error> {
+        let seed = seed.trim();
+        if !seed.is_empty() {
+            self.service.inner().kick_seed(seed).await
+        } else {
+            Ok(())
+        }
+    }
+
+    // pub async fn launch(uid: &NodeId, addr: &str, seed: &str) -> Result<Self, Error> {
+    //     let seed = seed.trim();
+
+    //     let seed = if !seed.is_empty() {
+    //         seed.to_string()
+    //     } else {
+    //         "".to_string()
+    //     };
+
+    //     let mut server = zrpc::Server::builder().build();
+    //     server.server_mut().bind(addr).await?;
+
+    //     let local_addr = server.server().local_addr().unwrap();
+    //     //let handler = Handler::new(uid, sock_addr.port() as i32);
+    //     let handler = Handler::new(uid, local_addr.port() as i32);
+    //     let service = znodes::Service::new(handler);
+
+    //     let server = Arc::new(server);
+    //     server.add_service(service.clone());
+
+    //     let server0 = server.clone();
+    //     let f = async move {
+    //         server0.server().run().await;
+    //     };
+    //     let span = tracing::span!(tracing::Level::INFO, "cluster");
+    //     tokio::spawn(Instrument::instrument(f, span));
+
+    //     if !seed.is_empty() {
+    //         service.inner().kick_seed(&seed).await?;
+    //     }
+
+    //     Ok(Self {
+    //         service,
+    //         local_addr,
+    //     })
+    // }
 }
 
 // pub async fn launch(uid: &str, addr: &str, seed: &str) -> core::result::Result<(), Box<dyn std::error::Error>> {

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct MqtreeInner<R> {
     value: Option<R>,
     subs: HashMap<String, MqtreeInner<R>>,
@@ -139,7 +139,7 @@ impl<R> MqtreeInner<R> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Mqtree<R> {
     inner: MqtreeInner<R>,
 }

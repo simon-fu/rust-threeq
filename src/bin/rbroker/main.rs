@@ -27,11 +27,14 @@ use tokio::{
     sync::broadcast,
     time::Instant,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, Instrument};
 
+mod cluster;
 mod discovery;
 mod hub;
+mod kafka;
 mod registry;
+mod service_sync_sub;
 mod znodes;
 mod zrpc;
 mod zserver;
@@ -763,16 +766,33 @@ async fn run_server(cfg: &Config) -> core::result::Result<(), Box<dyn std::error
     info!("channel type: [{}]", hub::bc_channel_type_name());
 
     if cfg.node_id > 0 {
-        let r = discovery::Service::launch(&cfg.node_id, &cfg.cluster_listen_addr, &cfg.seed).await;
-        if let Err(e) = r {
-            return Err(Box::new(e));
-        }
-        let discovery = r.unwrap();
-        info!(
-            "cluster service at [{}], id [{}]",
-            discovery.local_addr(),
-            discovery.id()
-        );
+        let mut server = zrpc::Server::builder().build();
+        server.server_mut().bind(&cfg.cluster_listen_addr).await?;
+        let local_addr = server.server().local_addr().unwrap();
+
+        let discovery = discovery::Service::new(&cfg.node_id, &local_addr);
+        discovery.kick_seed(&cfg.seed).await?;
+
+        // server.add_service(service_sync_sub::build(&discovery).await?);
+        server.add_service(discovery.service());
+
+        let f = async move {
+            server.server().run().await;
+        };
+        let span = tracing::span!(tracing::Level::INFO, "cluster");
+        tokio::spawn(Instrument::instrument(f, span));
+        info!("cluster service at [{}], id [{}]", local_addr, cfg.node_id);
+
+        // let r = discovery::Service::launch(&cfg.node_id, &cfg.cluster_listen_addr, &cfg.seed).await;
+        // if let Err(e) = r {
+        //     return Err(Box::new(e));
+        // }
+        // let discovery = r.unwrap();
+        // info!(
+        //     "cluster service at [{}], id [{}]",
+        //     discovery.local_addr(),
+        //     discovery.id()
+        // );
     } else {
         info!("standalone mode");
     }
@@ -848,9 +868,19 @@ async fn metrics() -> impl Responder {
 
 async fn async_main() -> std::io::Result<()> {
     tq3::log::tracing_subscriber::init();
+    // use tracing_subscriber::fmt::format::FmtSpan;
+    // tq3::log::tracing_subscriber::init_with_span_events(FmtSpan::ACTIVE);
 
     let cfg = Config::parse();
     info!("cfg={:?}", cfg);
+
+    if cfg.enable_gc {
+        let r = cluster::run().await;
+        if let Err(e) = r {
+            error!("{:?}", e);
+        }
+        std::process::exit(0);
+    }
 
     let tokio_h = tokio::spawn(async move {
         match run_server(&cfg).await {
