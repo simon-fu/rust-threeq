@@ -280,6 +280,8 @@ pub struct Config0 {
 
     #[serde(default = "RestPubsArg::default")]
     pub rest_pubs: RestPubsArg,
+
+    pub random_seed: Option<u64>,
 }
 
 #[derive(Debug, Default)]

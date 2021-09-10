@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use rand::SeedableRng;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -123,14 +124,27 @@ impl<'t> VarStr {
         return buf.iter().collect::<String>();
     }
 
-    pub fn random(&self) -> String {
-        let mut iter =
-            rand::Rng::sample_iter(rand::thread_rng(), &rand::distributions::Alphanumeric)
-                .map(char::from);
+    // pub fn random(&self) -> String {
+    //     let mut iter =
+    //         rand::Rng::sample_iter(rand::thread_rng(), &rand::distributions::Alphanumeric)
+    //             .map(char::from);
 
+    //     return self.make(|s| {
+    //         for v in s {
+    //             *v = iter.next().unwrap();
+    //         }
+    //     });
+    // }
+
+    pub fn random(&self) -> String {
+        self.random_with(&mut rand::thread_rng())
+    }
+
+    pub fn random_with<R: rand::Rng>(&self, random: &mut R) -> String {
         return self.make(|s| {
             for v in s {
-                *v = iter.next().unwrap();
+                let r = random.sample(&rand::distributions::Alphanumeric);
+                *v = char::from(r);
             }
         });
     }
@@ -162,7 +176,14 @@ pub fn make_pubsub_topics(
     pub_topic: &str,
     sub_n: u64,
     sub_topic: &str,
+    seed: &Option<u64>,
 ) -> (Vec<(u64, String)>, Vec<String>, String) {
+    let mut random_ = match seed {
+        Some(n) => rand::rngs::SmallRng::seed_from_u64(*n),
+        None => rand::rngs::SmallRng::seed_from_u64(rand::Rng::gen(&mut rand::thread_rng())),
+    };
+    let random = &mut random_;
+
     let pubv = VarStr::new(pub_topic);
     let subv = VarStr::new(sub_topic);
 
@@ -171,7 +192,7 @@ pub fn make_pubsub_topics(
 
     if pubv.is_dyn() && sub_topic == "-" {
         for _ in 0..pub_n {
-            let t = pubv.random();
+            let t = pubv.random_with(random);
             pub_topics.push((0, t.clone()));
             for _ in 0..sub_n {
                 sub_topics.push(t.clone());
@@ -180,7 +201,7 @@ pub fn make_pubsub_topics(
         (pub_topics, sub_topics, "subs-follow-pubs".to_string())
     } else if subv.is_dyn() && pub_topic == "-" {
         for _ in 0..sub_n {
-            let t = subv.random();
+            let t = subv.random_with(random);
             sub_topics.push(t.clone());
             for index in 0..pub_n {
                 pub_topics.push((index, t.clone()));
@@ -189,10 +210,10 @@ pub fn make_pubsub_topics(
         (pub_topics, sub_topics, "pubs-follow-subs".to_string())
     } else {
         for index in 0..pub_n {
-            pub_topics.push((index, pubv.random()));
+            pub_topics.push((index, pubv.random_with(random)));
         }
         for _ in 0..sub_n {
-            sub_topics.push(subv.random());
+            sub_topics.push(subv.random_with(random));
         }
         (
             pub_topics,

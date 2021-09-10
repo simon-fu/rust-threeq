@@ -265,6 +265,7 @@ pub async fn bench_all(cfgw: Arc<Config>, node_id: String) -> Result<(), common:
         &cfgw.raw().pubs.topic,
         cfgw.raw().subs.connections,
         &cfgw.raw().subs.topic,
+        &cfgw.raw().random_seed,
     );
     info!("topic rule: {}", desc);
 

@@ -66,6 +66,8 @@ pub struct Config0 {
 
     #[serde(default = "SubArgs::new")]
     pub subs: SubArgs,
+
+    pub random_seed: Option<u64>,
 }
 
 #[derive(Debug, Default)]

@@ -68,7 +68,8 @@
     // After all publish, it indicates timeout for waiting for sub connections receiving all packets 
     // which avoid infinite waiting if broker drop some packets
     recv_timeout_ms: 6000
-
+    random_seed: 777
+    
     pubs: {
         connections: 1
         conn_per_sec: 100

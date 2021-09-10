@@ -211,6 +211,7 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
         &cfgw.raw().pubs.topic,
         cfgw.raw().subs.connections,
         &cfgw.raw().subs.topic,
+        &cfgw.raw().random_seed,
     );
 
     info!("topic rule: {}", desc);
