@@ -179,8 +179,8 @@ pub fn make_pubsub_topics(
     seed: &Option<u64>,
 ) -> (Vec<(u64, String)>, Vec<String>, String) {
     let mut random_ = match seed {
-        Some(n) => rand::rngs::SmallRng::seed_from_u64(*n),
-        None => rand::rngs::SmallRng::seed_from_u64(rand::Rng::gen(&mut rand::thread_rng())),
+        Some(n) => rand::rngs::StdRng::seed_from_u64(*n),
+        None => rand::rngs::StdRng::seed_from_u64(rand::Rng::gen(&mut rand::thread_rng())),
     };
     let random = &mut random_;
 
@@ -209,9 +209,16 @@ pub fn make_pubsub_topics(
         }
         (pub_topics, sub_topics, "pubs-follow-subs".to_string())
     } else {
-        for index in 0..pub_n {
-            pub_topics.push((index, pubv.random_with(random)));
+        if !pubv.is_dyn() {
+            for index in 0..pub_n {
+                pub_topics.push((index, pubv.random_with(random)));
+            }
+        } else {
+            for _index in 0..pub_n {
+                pub_topics.push((0, pubv.random_with(random)));
+            }
         }
+
         for _ in 0..sub_n {
             sub_topics.push(subv.random_with(random));
         }
