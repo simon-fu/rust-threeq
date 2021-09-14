@@ -4,29 +4,12 @@ use crate::common::config::make_pubsub_topics;
 
 use super::super::common;
 use super::config as app;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use rust_threeq::tq3::tt;
 use std::sync::Arc;
 use tracing::{error, info, trace};
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("{0}")]
-    RunError(#[from] common::Error),
-}
-
-impl From<tt::client::Error> for common::Error {
-    fn from(error: tt::client::Error) -> Self {
-        common::Error::Generic(error.to_string())
-    }
-}
-
-impl From<reqwest::Error> for common::Error {
-    fn from(error: reqwest::Error) -> Self {
-        common::Error::Generic(error.to_string())
-    }
-}
 
 struct Suber {
     cfg: Arc<app::Config>,
@@ -38,7 +21,7 @@ struct Suber {
 
 #[async_trait]
 impl common::Suber for Suber {
-    async fn connect(&mut self) -> Result<(), common::Error> {
+    async fn connect(&mut self) -> Result<()> {
         let cfgw = &self.cfg;
         let cfg = cfgw.raw();
         let (mut sender, recver) = tt::client::make_connection("mqtt", &cfgw.env().address)
@@ -50,7 +33,7 @@ impl common::Suber for Suber {
         pkt.keep_alive = cfgw.raw().subs.keep_alive_secs as u16;
         let ack = sender.connect(pkt).await?;
         if ack.code != tt::ConnectReturnCode::Success {
-            return Err(common::Error::Generic(format!("{:?}", ack)));
+            bail!(format!("{:?}", ack));
         }
 
         let ack = sender
@@ -58,7 +41,7 @@ impl common::Suber for Suber {
             .await?;
         for reason in &ack.return_codes {
             if !reason.is_success() {
-                return Err(common::Error::Generic(format!("{:?}", ack)));
+                bail!(format!("{:?}", ack));
             }
         }
 
@@ -68,7 +51,7 @@ impl common::Suber for Suber {
         Ok(())
     }
 
-    async fn disconnect(&mut self) -> Result<(), common::Error> {
+    async fn disconnect(&mut self) -> Result<()> {
         if self.sender.is_some() {
             self.sender
                 .as_mut()
@@ -79,15 +62,15 @@ impl common::Suber for Suber {
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Bytes, common::Error> {
+    async fn recv(&mut self) -> Result<Bytes> {
         let ev = self.recver.as_mut().unwrap().recv().await?;
         let rpkt = match ev {
             tt::client::Event::Packet(pkt) => match pkt {
                 tt::Packet::Publish(rpkt) => rpkt,
-                _ => return Err(common::Error::Generic(format!("unexpect packet {:?}", pkt))),
+                _ => bail!(format!("unexpect packet {:?}", pkt)),
             },
             tt::client::Event::Closed(s) => {
-                return Err(common::Error::Generic(format!("got closed [{}]", s)));
+                bail!(format!("got closed [{}]", s));
             }
         };
         Ok(rpkt.payload)
@@ -104,7 +87,7 @@ struct Puber {
 
 #[async_trait]
 impl common::Puber for Puber {
-    async fn connect(&mut self) -> Result<(), common::Error> {
+    async fn connect(&mut self) -> Result<()> {
         let cfgw = &self.cfg;
         let (mut sender, recver) = tt::client::make_connection("mqtt", &cfgw.env().address)
             .await?
@@ -121,7 +104,7 @@ impl common::Puber for Puber {
         Ok(())
     }
 
-    async fn disconnect(&mut self) -> Result<(), common::Error> {
+    async fn disconnect(&mut self) -> Result<()> {
         if self.sender.is_some() {
             self.sender
                 .as_mut()
@@ -132,18 +115,18 @@ impl common::Puber for Puber {
         Ok(())
     }
 
-    async fn send(&mut self, data: Bytes) -> Result<(), common::Error> {
+    async fn send(&mut self, data: Bytes) -> Result<()> {
         let mut pkt = tt::Publish::new(&self.topic, self.cfg.raw().pubs.qos, []);
         pkt.payload = data;
         let _r = self.sender.as_mut().unwrap().publish(pkt).await?;
         Ok(())
     }
 
-    async fn idle(&mut self) -> Result<(), common::Error> {
+    async fn idle(&mut self) -> Result<()> {
         loop {
             let ev = self.recver.as_mut().unwrap().recv().await?;
             if let tt::client::Event::Closed(s) = ev {
-                return Err(common::Error::Generic(format!("got closed [{}]", s)));
+                bail!(format!("got closed [{}]", s));
             }
         }
     }
@@ -181,25 +164,25 @@ impl RestPuber {
 
 #[async_trait]
 impl common::Puber for RestPuber {
-    async fn connect(&mut self) -> Result<(), common::Error> {
+    async fn connect(&mut self) -> Result<()> {
         Ok(())
     }
 
-    async fn disconnect(&mut self) -> Result<(), common::Error> {
+    async fn disconnect(&mut self) -> Result<()> {
         Ok(())
     }
 
-    async fn send(&mut self, data: Bytes) -> Result<(), common::Error> {
+    async fn send(&mut self, data: Bytes) -> Result<()> {
         Self::call_rest(&self.cfg.env().rest_api, base64::encode(data)).await?;
         Ok(())
     }
 
-    async fn idle(&mut self) -> Result<(), common::Error> {
+    async fn idle(&mut self) -> Result<()> {
         Ok(())
     }
 }
 
-pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<(), Error> {
+pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<()> {
     let mut accounts = app::AccountIter::new(&cfgw.env().accounts);
 
     let mut bencher = common::PubsubBencher::new();

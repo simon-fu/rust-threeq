@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::Future;
@@ -13,42 +14,42 @@ use histogram::Histogram;
 use rust_threeq::tq3::{self, limit::Rate, TryRecv, TryRecvResult, TS};
 use tokio::{
     sync::{mpsc, watch},
-    task::{JoinError, JoinHandle},
-    time::{error::Elapsed, timeout},
+    task::JoinHandle,
+    time::timeout,
 };
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("error: {0}")]
-    Generic(String),
+// #[derive(Debug, thiserror::Error)]
+// pub enum Error {
+//     #[error("error: {0}")]
+//     Generic(String),
 
-    #[error("{0}")]
-    WatchError(tokio::sync::watch::error::RecvError),
+//     #[error("{0}")]
+//     WatchError(tokio::sync::watch::error::RecvError),
 
-    #[error("{0}")]
-    JoinError(#[from] JoinError),
+//     #[error("{0}")]
+//     JoinError(#[from] JoinError),
 
-    #[error("{0}")]
-    Timeout(#[from] Elapsed),
-}
+//     #[error("{0}")]
+//     Timeout(#[from] Elapsed),
+// }
 
 #[async_trait]
 pub trait Suber {
-    async fn connect(&mut self) -> Result<(), Error>;
-    async fn disconnect(&mut self) -> Result<(), Error>;
-    async fn recv(&mut self) -> Result<Bytes, Error>;
+    async fn connect(&mut self) -> Result<()>;
+    async fn disconnect(&mut self) -> Result<()>;
+    async fn recv(&mut self) -> Result<Bytes>;
 }
 
 #[async_trait]
 pub trait Puber {
-    async fn connect(&mut self) -> Result<(), Error>;
-    async fn disconnect(&mut self) -> Result<(), Error>;
-    async fn send(&mut self, data: Bytes) -> Result<(), Error>;
-    async fn flush(&mut self) -> Result<(), Error> {
+    async fn connect(&mut self) -> Result<()>;
+    async fn disconnect(&mut self) -> Result<()>;
+    async fn send(&mut self, data: Bytes) -> Result<()>;
+    async fn flush(&mut self) -> Result<()> {
         Ok(())
     }
-    async fn idle(&mut self) -> Result<(), Error>;
+    async fn idle(&mut self) -> Result<()>;
 }
 
 #[derive(Debug, Default)]
@@ -174,7 +175,7 @@ impl TaskStati {
 
 #[derive(Debug)]
 enum TaskEvent {
-    Error(Error),
+    Error(anyhow::Error),
     // Connected(Instant),
     Ready(Instant),
     Work(Instant),
@@ -204,13 +205,13 @@ struct Checker {
 }
 
 impl Checker {
-    pub fn input_and_check(&mut self, now_ms: i64, header: &body::Header) -> Result<u64, Error> {
+    pub fn input_and_check(&mut self, now_ms: i64, header: &body::Header) -> Result<u64> {
         if header.pubid >= self.items.len() {
             if header.pubid >= MAX_PUBS {
-                return Err(Error::Generic(format!(
+                bail!(format!(
                     "pubid exceed limit, expect {} but {}",
                     MAX_PUBS, header.pubid
-                )));
+                ));
             }
             self.items.resize(header.pubid + 1, PuberItem::default());
         }
@@ -222,15 +223,9 @@ impl Checker {
 
         if header.seq == 0 && *next_seq > 0 {
             // restart
-            return Err(Error::Generic(format!(
-                "restart, n {}, npkt {}",
-                header.seq, next_seq
-            )));
+            bail!(format!("restart, n {}, npkt {}", header.seq, next_seq));
         } else if header.seq < *next_seq {
-            return Err(Error::Generic(format!(
-                "expect seq {}, but {}",
-                *next_seq, header.seq
-            )));
+            bail!(format!("expect seq {}, but {}", *next_seq, header.seq));
         } else if header.seq > *next_seq {
             debug!("detect lost, expect seq {}, but {:?}", *next_seq, header);
             self.stati.lost += header.seq - *next_seq;
@@ -244,10 +239,10 @@ impl Checker {
         item.next_seq = header.seq + 1;
 
         if item.next_seq > item.max_seq {
-            return Err(Error::Generic(format!(
+            bail!(format!(
                 "seq exceed limit {}, pubid {}",
                 item.next_seq, header.pubid
-            )));
+            ));
         } else if item.next_seq == item.max_seq {
             if self.check_done() {
                 self.done = true;
@@ -309,9 +304,9 @@ impl Checker {
     }
 }
 
-async fn wait_for_req(rx: &mut ReqRecver) -> Result<TaskReq, Error> {
+async fn wait_for_req(rx: &mut ReqRecver) -> Result<TaskReq> {
     if let Err(e) = rx.changed().await {
-        return Err(Error::WatchError(e));
+        bail!(e);
     }
     return Ok(*rx.borrow());
 }
@@ -328,7 +323,7 @@ impl<T: Suber + Send> SubSession<T> {
         Self { client, id, tx, rx }
     }
 
-    async fn task_entry(&mut self) -> Result<(), Error> {
+    async fn task_entry(&mut self) -> Result<()> {
         self.client.connect().await?;
 
         let _r = self.tx.send(TaskEvent::Ready(Instant::now())).await;
@@ -413,7 +408,7 @@ impl<T: Puber + Send> PubSession<T> {
         }
     }
 
-    async fn task_entry(&mut self) -> Result<(), Error> {
+    async fn task_entry(&mut self) -> Result<()> {
         self.client.connect().await?;
 
         let _r = self.tx.send(TaskEvent::Ready(Instant::now())).await;
@@ -515,7 +510,7 @@ impl SessionsResult {
         );
     }
 
-    async fn handle_event(&mut self, ev: TaskEvent) -> Result<(), Error> {
+    async fn handle_event(&mut self, ev: TaskEvent) -> Result<()> {
         match ev {
             TaskEvent::Error(e) => {
                 return Err(e);
@@ -560,7 +555,7 @@ impl SessionsResult {
         Ok(())
     }
 
-    async fn recv_event(&mut self, ev_rx: &mut EVRecver) -> Result<bool, Error> {
+    async fn recv_event(&mut self, ev_rx: &mut EVRecver) -> Result<bool> {
         let o = ev_rx.recv().await;
         if o.is_none() {
             return Ok(false);
@@ -571,7 +566,7 @@ impl SessionsResult {
         Ok(true)
     }
 
-    async fn try_recv_event(&mut self, ev_rx: &mut EVRecver) -> Result<bool, Error> {
+    async fn try_recv_event(&mut self, ev_rx: &mut EVRecver) -> Result<bool> {
         let r = TryRecv::new(ev_rx).await;
         match r {
             TryRecvResult::Value(ev) => {
@@ -584,7 +579,7 @@ impl SessionsResult {
         Ok(false)
     }
 
-    async fn wait_for_ready(&mut self, ev_rx: &mut EVRecver) -> Result<(), Error> {
+    async fn wait_for_ready(&mut self, ev_rx: &mut EVRecver) -> Result<()> {
         if self.num_readys < self.num_tasks {
             debug!("{}: waiting for connections ready...", self.name);
             while self.num_readys < self.num_tasks {
@@ -599,14 +594,14 @@ impl SessionsResult {
     pub async fn launch(
         mut self: Box<Self>,
         mut ev_rx: EVRecver,
-    ) -> Result<JoinHandle<Result<Box<Self>, Error>>, Error> {
+    ) -> Result<JoinHandle<Result<Box<Self>>>> {
         let h = tokio::spawn(async move {
             loop {
                 if !self.recv_event(&mut ev_rx).await? {
                     break;
                 }
             }
-            Ok::<Box<Self>, Error>(self)
+            Ok::<Box<Self>, anyhow::Error>(self)
         });
         Ok(h)
     }
@@ -616,7 +611,7 @@ impl SessionsResult {
 pub struct Sessions {
     name: String,
     results: Option<Box<SessionsResult>>,
-    merge_task: Option<JoinHandle<Result<Box<SessionsResult>, Error>>>,
+    merge_task: Option<JoinHandle<Result<Box<SessionsResult>>>>,
 }
 
 impl Sessions {
@@ -635,7 +630,7 @@ impl Sessions {
         num_sessions: u64,
         sessions_per_sec: u64,
         mut factory: F,
-    ) -> Result<(), Error>
+    ) -> Result<()>
     where
         F: FnMut(u64, EVSender, ReqRecver) -> R,
         R: Future<Output = ()> + Send,
@@ -690,7 +685,7 @@ impl Sessions {
         Ok(())
     }
 
-    pub async fn wait_for_finished(&mut self) -> Result<(), Error> {
+    pub async fn wait_for_finished(&mut self) -> Result<()> {
         if self.merge_task.is_some() {
             let results = self.merge_task.as_mut().unwrap().await??;
             self.merge_task.take();
@@ -706,7 +701,7 @@ struct SessionGroups {
 }
 
 impl SessionGroups {
-    async fn wait_for_finished(&mut self) -> Result<(), Error> {
+    async fn wait_for_finished(&mut self) -> Result<()> {
         for sss in &mut self.groups {
             sss.wait_for_finished().await?;
         }
@@ -742,7 +737,7 @@ impl PubsubBencher {
         num_sessions: u64,
         sessions_per_sec: u64,
         mut factory: F,
-    ) -> Result<(), Error>
+    ) -> Result<()>
     where
         F: FnMut(u64) -> T,
     {
@@ -778,7 +773,7 @@ impl PubsubBencher {
         sessions_per_sec: u64,
         args: Arc<PubArgs>,
         mut factory: F,
-    ) -> Result<(), Error>
+    ) -> Result<()>
     where
         F: FnMut(u64) -> (u64, T),
     {
@@ -812,7 +807,7 @@ impl PubsubBencher {
         Ok(())
     }
 
-    pub async fn kick_and_wait(&mut self, timeout_ms: u64) -> Result<(), Error> {
+    pub async fn kick_and_wait(&mut self, timeout_ms: u64) -> Result<()> {
         let kick_time = Instant::now();
         if self.is_pub_packets {
             debug!("-> kick start");
@@ -822,7 +817,7 @@ impl PubsubBencher {
 
             let r = timeout(Duration::from_millis(timeout_ms), async {
                 self.subs.wait_for_finished().await?;
-                Ok::<(), Error>(())
+                Ok::<(), anyhow::Error>(())
             })
             .await;
 
