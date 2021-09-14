@@ -87,6 +87,7 @@
         packets: 100
         protocol: V4
         clean_session: true
+        // inflights: 128
     }
     subs: {
         connections: 1

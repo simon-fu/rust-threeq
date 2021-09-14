@@ -308,8 +308,14 @@ impl<T: Flight> Inflights<T> {
         }
     }
 
+    #[inline]
     pub async fn check(&mut self) -> Result<Vec<T::Output>> {
         let mut outputs = Vec::new();
+        self.do_check(&mut outputs).await?;
+        Ok(outputs)
+    }
+
+    async fn do_check(&mut self, outputs: &mut Vec<T::Output>) -> Result<()> {
         while !self.que.is_empty() {
             let flight = self.que.front_mut().unwrap();
             let r = flight.try_recv_ack().await?;
@@ -323,9 +329,10 @@ impl<T: Flight> Inflights<T> {
                 }
             }
         }
-        return Ok(outputs);
+        return Ok(());
     }
 
+    #[inline]
     pub async fn wait_for_oldest_and_check(&mut self) -> Result<Vec<T::Output>> {
         if self.que.is_empty() {
             return Ok(Vec::new());
@@ -337,7 +344,8 @@ impl<T: Flight> Inflights<T> {
             let r = flight.recv_ack().await?;
             outputs.push(r);
         }
-        self.check().await
+        self.do_check(&mut outputs).await?;
+        Ok(outputs)
     }
 
     pub async fn wait_for_newest(&mut self) -> Result<Option<T::Output>> {

@@ -69,12 +69,18 @@ struct Puber {
 #[async_trait]
 impl common::Puber for Puber {
     async fn connect(&mut self) -> Result<()> {
+        let batch_size = if self.config.raw().pubs.inflights > 1 {
+            Some(self.config.raw().pubs.inflights as u32)
+        } else {
+            None
+        };
         let producer = self
             .pulsar
             .producer()
             .with_topic(&self.topic)
             // .with_name("my producer")
             .with_options(producer::ProducerOptions {
+                batch_size,
                 schema: Some(proto::Schema {
                     r#type: proto::schema::Type::None as i32,
                     ..Default::default()
@@ -96,10 +102,10 @@ impl common::Puber for Puber {
     }
 
     async fn send(&mut self, data: Bytes) -> Result<()> {
-        let r = self.producer.as_mut().unwrap().send(Data(data)).await?;
-        self.inflights
-            .add_and_check(PubFlight { future: r }, self.config.raw().pubs.inflights)
-            .await?;
+        let _r = self.producer.as_mut().unwrap().send(Data(data)).await?;
+        // self.inflights
+        //     .add_and_check(PubFlight { future: r }, self.config.raw().pubs.inflights)
+        //     .await?;
         Ok(())
     }
 
