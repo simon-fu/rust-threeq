@@ -1,12 +1,8 @@
+use anyhow::Result;
+use async_trait::async_trait;
+use std::collections::VecDeque;
 use std::time::Duration;
-
 use tracing::info;
-
-use core::future::Future;
-use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
-use tokio::sync::mpsc;
 
 pub mod tt;
 
@@ -207,6 +203,11 @@ impl SnowflakeIdSafe {
     }
 }
 
+use core::future::Future;
+use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
+use tokio::sync::mpsc;
 // refer from ReceiverStream::next()
 #[derive(Debug)]
 pub struct TryRecv<'a, T> {
@@ -237,6 +238,116 @@ impl<T> Future for TryRecv<'_, T> {
             },
             Poll::Pending => Poll::Ready(TryRecvResult::Empty),
         }
+    }
+}
+
+struct TryPoll<'a, T: futures::Future + Unpin>(&'a mut T);
+
+impl<'a, T: futures::Future + Unpin> futures::Future for TryPoll<'a, T> {
+    type Output = Option<T::Output>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        // std::pin::Pin::new(&mut self.0).poll(cx);
+        let r = futures::FutureExt::poll_unpin(self.0, cx);
+        match r {
+            std::task::Poll::Ready(r) => std::task::Poll::Ready(Some(r)),
+            std::task::Poll::Pending => std::task::Poll::Ready(None),
+        }
+    }
+}
+
+#[inline]
+pub async fn try_poll<'a, T: futures::Future + Unpin>(o: &'a mut T) -> Option<T::Output> {
+    TryPoll(o).await
+}
+
+#[async_trait]
+pub trait Flight {
+    type Output;
+    async fn try_recv_ack(&mut self) -> Result<Option<Self::Output>>;
+    async fn recv_ack(self) -> Result<Self::Output>;
+}
+
+pub struct Inflights<T> {
+    que: VecDeque<T>,
+}
+
+impl<T: Flight> Inflights<T> {
+    pub fn new() -> Self {
+        Self {
+            que: VecDeque::new(),
+        }
+    }
+
+    // #[inline]
+    // pub fn is_empty(&self) -> bool {
+    //     self.que.is_empty()
+    // }
+
+    // #[inline]
+    // pub fn len(&mut self) -> usize{
+    //     self.que.len()
+    // }
+
+    #[inline]
+    pub async fn add_and_check(&mut self, value: T, max: usize) -> Result<Vec<T::Output>> {
+        let mut outputs = Vec::new();
+        if max <= 1 {
+            outputs.push(value.recv_ack().await?);
+            return Ok(outputs);
+        }
+
+        self.que.push_back(value);
+        if self.que.len() >= max {
+            return self.wait_for_oldest_and_check().await;
+        } else {
+            return self.check().await;
+        }
+    }
+
+    pub async fn check(&mut self) -> Result<Vec<T::Output>> {
+        let mut outputs = Vec::new();
+        while !self.que.is_empty() {
+            let flight = self.que.front_mut().unwrap();
+            let r = flight.try_recv_ack().await?;
+            match r {
+                Some(r) => {
+                    self.que.pop_front();
+                    outputs.push(r);
+                }
+                None => {
+                    break;
+                }
+            }
+        }
+        return Ok(outputs);
+    }
+
+    pub async fn wait_for_oldest_and_check(&mut self) -> Result<Vec<T::Output>> {
+        if self.que.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut outputs = Vec::new();
+        {
+            let flight = self.que.pop_front().unwrap();
+            let r = flight.recv_ack().await?;
+            outputs.push(r);
+        }
+        self.check().await
+    }
+
+    pub async fn wait_for_newest(&mut self) -> Result<Option<T::Output>> {
+        if self.que.is_empty() {
+            return Ok(None);
+        }
+        let flight = self.que.pop_back().unwrap();
+        self.que.clear();
+        let r = flight.recv_ack().await?;
+        return Ok(Some(r));
     }
 }
 

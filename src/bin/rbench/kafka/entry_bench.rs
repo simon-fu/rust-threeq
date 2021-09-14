@@ -1,67 +1,55 @@
-use std::sync::Arc;
-
 use super::config::Config;
 use crate::common;
 use crate::common::config::make_pubsub_topics;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::TryStreamExt;
-use pulsar::{
-    message::proto, producer, Error as PulsarError, Pulsar, SerializeMessage, TokioExecutor,
-};
-use pulsar::{
-    message::proto::command_subscribe::SubType, message::Payload, Consumer, DeserializeMessage,
-};
-use pulsar::{ConsumerOptions, Producer};
-// use serde::{Deserialize, Serialize};
-use anyhow::Result;
 use rust_threeq::tq3::{try_poll, Flight, Inflights};
-use tracing::{error, info, trace};
+use std::sync::Arc;
 
-struct Data(Bytes);
-
-impl SerializeMessage for Data {
-    fn serialize_message(input: Self) -> Result<producer::Message, PulsarError> {
-        Ok(producer::Message {
-            payload: input.0.to_vec(),
-            ..Default::default()
-        })
-    }
-}
-
-impl DeserializeMessage for Data {
-    type Output = Result<Data, serde_json::Error>;
-
-    fn deserialize_message(payload: &Payload) -> Self::Output {
-        Ok(Data(Bytes::copy_from_slice(&payload.data)))
-    }
-}
+use log::{error, info, trace};
+use rdkafka::{
+    consumer::{CommitMode, Consumer, StreamConsumer},
+    producer::{DeliveryFuture, FutureProducer, FutureRecord},
+    ClientConfig, Message,
+};
 
 struct PubFlight {
-    future: producer::SendFuture,
+    future: DeliveryFuture,
 }
 
 #[async_trait]
 impl Flight for PubFlight {
-    type Output = pulsar::CommandSendReceipt;
-
+    type Output = (i32, i64);
     async fn try_recv_ack(&mut self) -> Result<Option<Self::Output>> {
         let r = try_poll(&mut self.future).await;
         if r.is_none() {
             return Ok(None);
         }
-        Ok(Some(r.unwrap()?))
+        let r = check_pub_ack(r.unwrap()?)?;
+        Ok(Some(r))
     }
 
     async fn recv_ack(self) -> Result<Self::Output> {
-        Ok(self.future.await?)
+        let r = check_pub_ack(self.future.await?)?;
+        Ok(r)
+    }
+}
+
+fn check_pub_ack(
+    r: Result<(i32, i64), (rdkafka::error::KafkaError, rdkafka::message::OwnedMessage)>,
+) -> Result<(i32, i64)> {
+    match r {
+        Ok(r) => Ok(r),
+        Err((e, _o)) => {
+            bail!(e);
+        }
     }
 }
 
 struct Puber {
     topic: String,
-    pulsar: Pulsar<TokioExecutor>,
-    producer: Option<Producer<TokioExecutor>>,
+    producer: Option<FutureProducer>,
     inflights: Inflights<PubFlight>,
     config: Arc<Config>,
 }
@@ -69,22 +57,6 @@ struct Puber {
 #[async_trait]
 impl common::Puber for Puber {
     async fn connect(&mut self) -> Result<()> {
-        let producer = self
-            .pulsar
-            .producer()
-            .with_topic(&self.topic)
-            // .with_name("my producer")
-            .with_options(producer::ProducerOptions {
-                schema: Some(proto::Schema {
-                    r#type: proto::schema::Type::None as i32,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })
-            .build()
-            .await?;
-        self.producer = Some(producer);
-        // self.pulsar = Some(pulsar);
         Ok(())
     }
 
@@ -96,11 +68,30 @@ impl common::Puber for Puber {
     }
 
     async fn send(&mut self, data: Bytes) -> Result<()> {
-        let r = self.producer.as_mut().unwrap().send(Data(data)).await?;
-        self.inflights
-            .add_and_check(PubFlight { future: r }, self.config.raw().pubs.inflights)
-            .await?;
-        Ok(())
+        loop {
+            let slice = &data[..];
+            let topic = self.topic.clone();
+            let r = self
+                .producer
+                .as_mut()
+                .unwrap()
+                .send_result(FutureRecord::<String, _>::to(&topic).payload(slice));
+
+            match r {
+                Ok(f) => {
+                    let f = PubFlight { future: f };
+                    let _r = self
+                        .inflights
+                        .add_and_check(f, self.config.raw().pubs.inflights)
+                        .await?;
+                    return Ok(());
+                }
+
+                Err(_e) => {
+                    self.inflights.wait_for_oldest_and_check().await?;
+                }
+            }
+        }
     }
 
     async fn flush(&mut self) -> Result<()> {
@@ -114,33 +105,18 @@ impl common::Puber for Puber {
 }
 
 struct Suber {
-    id: String,
     topic: String,
-    pulsar: Pulsar<TokioExecutor>,
-    consumer: Option<Consumer<Data, TokioExecutor>>,
+    consumer: Option<StreamConsumer>,
 }
 
 #[async_trait]
 impl common::Suber for Suber {
     async fn connect(&mut self) -> Result<()> {
-        let consumer: Consumer<Data, _> = self
-            .pulsar
-            .consumer()
-            .with_options(ConsumerOptions {
-                schema: Some(proto::Schema {
-                    r#type: proto::schema::Type::None as i32,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })
-            .with_topic(&self.topic)
-            .with_consumer_name(self.id.clone())
-            .with_subscription_type(SubType::Exclusive)
-            .with_subscription(self.id.clone())
-            .build()
-            .await?;
-        self.consumer = Some(consumer);
-        // self.pulsar = Some(pulsar);
+        self.consumer
+            .as_ref()
+            .unwrap()
+            .subscribe(&[&self.topic])
+            .unwrap();
         Ok(())
     }
 
@@ -152,10 +128,16 @@ impl common::Suber for Suber {
     }
 
     async fn recv(&mut self) -> Result<Bytes> {
-        let msg = self.consumer.as_mut().unwrap().try_next().await?.unwrap();
-        self.consumer.as_mut().unwrap().ack(&msg).await?;
-        let data = msg.deserialize()?;
-        Ok(data.0)
+        let borrowed_message = self.consumer.as_ref().unwrap().recv().await.unwrap();
+        let msg = borrowed_message.detach();
+        self.consumer
+            .as_ref()
+            .unwrap()
+            .commit_message(&borrowed_message, CommitMode::Async)
+            .unwrap();
+        let payload = msg.payload().unwrap();
+        let b = Bytes::copy_from_slice(payload);
+        Ok(b)
     }
 }
 
@@ -172,11 +154,6 @@ pub async fn bench_all(cfgw: Arc<Config>, node_id: String) -> Result<()> {
         &cfgw.raw().random_seed,
     );
     info!("topic rule: {}", desc);
-    info!("pub inflights: {}", cfgw.raw().pubs.inflights);
-
-    let pulsar: Pulsar<_> = Pulsar::builder(&cfgw.env().address, TokioExecutor)
-        .build()
-        .await?;
 
     if sub_topics.len() > 0 {
         let _r = bencher
@@ -185,11 +162,21 @@ pub async fn bench_all(cfgw: Arc<Config>, node_id: String) -> Result<()> {
                 &mut sub_id,
                 sub_topics.len() as u64,
                 cfgw.raw().subs.conn_per_sec,
-                |n| Suber {
-                    id: format!("{}-sub-{}", node_id, n),
-                    topic: sub_topics.pop().unwrap(),
-                    pulsar: pulsar.clone(),
-                    consumer: None,
+                |n| {
+                    let sub_id = format!("{}-sub-{}", node_id, n);
+                    let consumer: StreamConsumer = ClientConfig::new()
+                        .set("group.id", &sub_id)
+                        .set("bootstrap.servers", &cfgw.env().address)
+                        .set("enable.partition.eof", "false")
+                        .set("session.timeout.ms", "6000")
+                        .set("enable.auto.commit", "false")
+                        .create()
+                        .unwrap();
+
+                    Suber {
+                        topic: sub_topics.pop().unwrap(),
+                        consumer: Some(consumer),
+                    }
                 },
             )
             .await?;
@@ -212,10 +199,16 @@ pub async fn bench_all(cfgw: Arc<Config>, node_id: String) -> Result<()> {
                 args,
                 |_n| {
                     let item = pub_topics.pop().unwrap();
+
+                    let r = ClientConfig::new()
+                        .set("bootstrap.servers", &cfgw.env().address)
+                        .set("message.timeout.ms", "5000")
+                        .create();
+                    let producer: FutureProducer = r.unwrap();
+
                     let o = Puber {
                         topic: item.1,
-                        pulsar: pulsar.clone(),
-                        producer: None,
+                        producer: Some(producer),
                         inflights: Inflights::new(),
                         config: cfgw.clone(),
                     };

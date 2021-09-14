@@ -46,9 +46,7 @@ pub trait Puber {
     async fn connect(&mut self) -> Result<()>;
     async fn disconnect(&mut self) -> Result<()>;
     async fn send(&mut self, data: Bytes) -> Result<()>;
-    async fn flush(&mut self) -> Result<()> {
-        Ok(())
-    }
+    async fn flush(&mut self) -> Result<()>;
     async fn idle(&mut self) -> Result<()>;
 }
 

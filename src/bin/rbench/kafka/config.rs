@@ -28,7 +28,7 @@ impl PubArgs {
             r"{
             connections: 1 
             conn_per_sec: 1
-            topic: non-persistent://public/default/test
+            topic: test1
             qps: 1
             padding_to_size: 256
             packets: 1
@@ -55,7 +55,7 @@ impl SubArgs {
             r"{
             connections: 1 
             conn_per_sec: 1
-            topic: non-persistent://public/default/test
+            topic: test1
         }",
         )
     }

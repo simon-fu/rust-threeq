@@ -103,6 +103,9 @@ pub struct PubArgs {
 
     #[serde(default = "bool_true")]
     pub clean_session: bool,
+
+    #[serde(default = "PubArgs::default_inflights")]
+    pub inflights: usize,
 }
 
 impl PubArgs {
@@ -118,6 +121,10 @@ impl PubArgs {
             packets: 1
         }",
         )
+    }
+
+    pub fn default_inflights() -> usize {
+        1
     }
 }
 

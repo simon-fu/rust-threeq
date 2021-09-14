@@ -38,7 +38,13 @@ Events:
 use crate::tq3::tt;
 use bytes::{Bytes, BytesMut};
 use core::panic;
-use std::{collections::HashMap, convert::TryFrom, time::Duration};
+use std::{
+    collections::HashMap,
+    convert::TryFrom,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -916,6 +922,75 @@ impl Receiver {
     }
 }
 
+pub struct PublishFuture {
+    rx: ResponseRX,
+    qos: tt::QoS,
+}
+
+impl PublishFuture {
+    fn new(rx: ResponseRX, qos: tt::QoS) -> Self {
+        Self { rx, qos }
+    }
+}
+
+impl futures::Future for PublishFuture {
+    type Output = Result<(), Error>;
+    // type Output = Result<M, Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.qos == tt::QoS::AtMostOnce {
+            return Poll::Ready(Ok(()));
+        }
+
+        match Pin::new(&mut self.rx).poll(cx) {
+            Poll::Ready(Ok(r)) => {
+                let event = match r {
+                    Response::Event(e) => e,
+                    Response::Error(e) => {
+                        return Poll::Ready(Err(e));
+                    }
+                    Response::Connected => panic!("never reach here"),
+                };
+
+                let pkt = match event {
+                    Event::Packet(pkt) => pkt,
+                    Event::Closed(r) => {
+                        let e = Error::Generic(format!("expect packet but closed with [{}]", r));
+                        return Poll::Ready(Err(e));
+                    }
+                };
+
+                match self.qos {
+                    tt::QoS::AtMostOnce => Poll::Ready(Ok(())),
+                    tt::QoS::AtLeastOnce => {
+                        if let tt::Packet::PubAck(_r) = pkt {
+                            Poll::Ready(Ok(()))
+                        } else {
+                            let e = Error::Generic(format!("response expect PubAck but {:?}", pkt));
+                            Poll::Ready(Err(e))
+                        }
+                    }
+                    tt::QoS::ExactlyOnce => {
+                        if let tt::Packet::PubComp(_) = pkt {
+                            Poll::Ready(Ok(()))
+                        } else {
+                            let e =
+                                Error::Generic(format!("response expect PubComp but {:?}", pkt));
+                            Poll::Ready(Err(e))
+                        }
+                    }
+                }
+            }
+
+            Poll::Ready(Err(_e)) => Poll::Ready(Err(Error::Generic(
+                "worker unexpectedly disconnected".into(),
+            )
+            .into())),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Sender {
     tx: mpsc::Sender<Request>,
@@ -1073,6 +1148,31 @@ impl Sender {
                 }
             }
         }
+    }
+
+    pub async fn publish_result(&mut self, pkt: tt::Publish) -> Result<PublishFuture, Error> {
+        let qos = pkt.qos;
+
+        let (tx, rx) = oneshot::channel();
+        let tx = if pkt.qos == tt::QoS::AtMostOnce {
+            let _r = tx.send(Response::Connected); // never use Response::Connected
+            None
+        } else {
+            Some(tx)
+        };
+
+        if let Err(_) = self
+            .tx
+            .send(Request {
+                req: ReqItem::Packet(tt::Packet::Publish(pkt)),
+                tx,
+            })
+            .await
+        {
+            return Err(Error::Finished);
+        }
+
+        Ok(PublishFuture::new(rx, qos))
     }
 }
 

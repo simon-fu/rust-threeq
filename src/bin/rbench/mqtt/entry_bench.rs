@@ -7,7 +7,11 @@ use super::config as app;
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use rust_threeq::tq3::tt;
+use rust_threeq::tq3::{
+    try_poll,
+    tt::{self, client::PublishFuture},
+    Flight, Inflights,
+};
 use std::sync::Arc;
 use tracing::{error, info, trace};
 
@@ -77,12 +81,34 @@ impl common::Suber for Suber {
     }
 }
 
+struct PubFlight {
+    future: PublishFuture,
+}
+
+#[async_trait]
+impl Flight for PubFlight {
+    type Output = ();
+
+    async fn try_recv_ack(&mut self) -> Result<Option<Self::Output>> {
+        let r = try_poll(&mut self.future).await;
+        if r.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(r.unwrap()?))
+    }
+
+    async fn recv_ack(self) -> Result<Self::Output> {
+        Ok(self.future.await?)
+    }
+}
+
 struct Puber {
     cfg: Arc<app::Config>,
     acc: app::Account,
     topic: String,
     sender: Option<tt::client::Sender>,
     recver: Option<tt::client::Receiver>,
+    inflights: Inflights<PubFlight>,
 }
 
 #[async_trait]
@@ -118,7 +144,16 @@ impl common::Puber for Puber {
     async fn send(&mut self, data: Bytes) -> Result<()> {
         let mut pkt = tt::Publish::new(&self.topic, self.cfg.raw().pubs.qos, []);
         pkt.payload = data;
-        let _r = self.sender.as_mut().unwrap().publish(pkt).await?;
+        let r = self.sender.as_mut().unwrap().publish_result(pkt).await?;
+        // let _r = r.await?;
+        self.inflights
+            .add_and_check(PubFlight { future: r }, self.cfg.raw().pubs.inflights)
+            .await?;
+        Ok(())
+    }
+
+    async fn flush(&mut self) -> Result<()> {
+        let _r = self.inflights.wait_for_newest().await?;
         Ok(())
     }
 
@@ -177,6 +212,10 @@ impl common::Puber for RestPuber {
         Ok(())
     }
 
+    async fn flush(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     async fn idle(&mut self) -> Result<()> {
         Ok(())
     }
@@ -198,6 +237,7 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<()> {
     );
 
     info!("topic rule: {}", desc);
+    info!("pub inflights: {}", cfgw.raw().pubs.inflights);
 
     if sub_topics.len() > 0 {
         let _r = bencher
@@ -244,6 +284,7 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<()> {
                         topic: item.1,
                         sender: None,
                         recver: None,
+                        inflights: Inflights::new(),
                     };
                     (item.0, o)
                 },
