@@ -3,6 +3,7 @@ use rust_threeq::tq3;
 use std::fmt::Debug;
 
 mod common;
+mod kafka;
 mod mqtt;
 mod pulsar;
 
@@ -20,6 +21,7 @@ struct CmdArgs {
 enum SubCmd {
     Mqtt(mqtt::Args),
     Pulsar(pulsar::Args),
+    Kafka(kafka::Args),
 }
 
 #[tokio::main]
@@ -35,6 +37,7 @@ async fn main() {
     match args.cmd {
         SubCmd::Mqtt(opt) => mqtt::run(&opt).await,
         SubCmd::Pulsar(opt) => pulsar::run(&opt).await,
+        SubCmd::Kafka(opt) => kafka::run(&opt).await,
     }
 }
 

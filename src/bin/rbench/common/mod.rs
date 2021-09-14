@@ -45,6 +45,9 @@ pub trait Puber {
     async fn connect(&mut self) -> Result<(), Error>;
     async fn disconnect(&mut self) -> Result<(), Error>;
     async fn send(&mut self, data: Bytes) -> Result<(), Error>;
+    async fn flush(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
     async fn idle(&mut self) -> Result<(), Error>;
 }
 
@@ -459,6 +462,8 @@ impl<T: Puber + Send> PubSession<T> {
                 self.client.idle().await?;
             }
         }
+        self.client.flush().await?;
+
         let t = Instant::now();
         let elapsed_ms = pacer.kick_time().elapsed().as_millis() as u64;
         // debug!("elapsed_ms {}", elapsed_ms);

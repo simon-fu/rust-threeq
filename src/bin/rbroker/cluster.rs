@@ -2,8 +2,8 @@
 // - check all unwrap
 // - impl zrpc::ClientSync
 
-use anyhow::{bail, Context, Result};
-
+use anyhow::Result;
+use anyhow::{bail, Context};
 use async_raft::{
     raft::{
         AppendEntriesRequest, AppendEntriesResponse, ClientWriteRequest, Entry, EntryPayload,

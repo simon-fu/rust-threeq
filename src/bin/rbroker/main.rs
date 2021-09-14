@@ -875,6 +875,12 @@ async fn async_main() -> std::io::Result<()> {
     info!("cfg={:?}", cfg);
 
     if cfg.enable_gc {
+        let r = kafka::run().await;
+        if let Err(e) = r {
+            error!("{:?}", e);
+            std::process::exit(0);
+        }
+
         let r = cluster::run().await;
         if let Err(e) = r {
             error!("{:?}", e);
