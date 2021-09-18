@@ -133,6 +133,23 @@ pub mod tracing_subscriber {
         return *INITED;
     }
 
+    pub fn init_with_filters(filters: &str) {
+        let mut env_filter = EnvFilter::new(filters);
+        if std::env::var(EnvFilter::DEFAULT_ENV).is_ok() {
+            let df = std::env::var(EnvFilter::DEFAULT_ENV).unwrap();
+            let r = df.split(',');
+            for s in r {
+                env_filter = env_filter.add_directive(s.parse().unwrap());
+            }
+        }
+
+        tracing_subscriber::fmt()
+            .with_target(false)
+            .with_env_filter(env_filter)
+            .event_format(MyFormatter::default())
+            .init();
+    }
+
     pub fn init_with_span_events(kind: tracing_subscriber::fmt::format::FmtSpan) {
         let env_filter = if std::env::var(EnvFilter::DEFAULT_ENV).is_ok() {
             EnvFilter::from_default_env()

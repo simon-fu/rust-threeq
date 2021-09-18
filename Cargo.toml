@@ -82,6 +82,7 @@ async-raft = "0.6.1"
 anyhow = "1.0.43"
 rdkafka = "0.26.0"
 log = "0.4.14"
+pretty-hex = "0.2.1"
 
 [dev-dependencies]
 # criterion = "^0.3.4"

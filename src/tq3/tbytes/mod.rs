@@ -64,13 +64,23 @@ pub enum PacketType {
 /// Protocol type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Protocol {
-    V4,
-    V5,
+    V4 = 4,
+    V5 = 5,
 }
 
 impl Default for Protocol {
     fn default() -> Self {
         Protocol::V4
+    }
+}
+
+impl Protocol {
+    pub fn from_u8(num: u8) -> Result<Self, Error> {
+        match num {
+            4 => Ok(Protocol::V4),
+            5 => Ok(Protocol::V5),
+            num => return Err(Error::InvalidProtocolLevel(num)),
+        }
     }
 }
 
