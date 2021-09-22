@@ -68,34 +68,34 @@ impl ConnAck {
         len
     }
 
-    pub fn decode(
-        protocol: Protocol,
-        fixed_header: FixedHeader,
-        mut bytes: Bytes,
-    ) -> Result<Self, Error> {
-        let variable_header_index = fixed_header.fixed_header_len;
-        bytes.advance(variable_header_index);
+    // pub fn decode(
+    //     protocol: Protocol,
+    //     fixed_header: FixedHeader,
+    //     mut bytes: Bytes,
+    // ) -> Result<Self, Error> {
+    //     let variable_header_index = fixed_header.fixed_header_len;
+    //     bytes.advance(variable_header_index);
 
-        let flags = read_u8(&mut bytes)?;
-        let return_code = read_u8(&mut bytes)?;
+    //     let flags = read_u8(&mut bytes)?;
+    //     let return_code = read_u8(&mut bytes)?;
 
-        let session_present = (flags & 0x01) == 1;
+    //     let session_present = (flags & 0x01) == 1;
 
-        let connack = match protocol {
-            Protocol::V4 => ConnAck {
-                session_present,
-                code: connect_return_v4(return_code)?,
-                properties: None,
-            },
-            Protocol::V5 => ConnAck {
-                session_present,
-                code: connect_return_v5(return_code)?,
-                properties: ConnAckProperties::extract(&mut bytes)?,
-            },
-        };
+    //     let connack = match protocol {
+    //         Protocol::V4 => ConnAck {
+    //             session_present,
+    //             code: connect_return_v4(return_code)?,
+    //             properties: None,
+    //         },
+    //         Protocol::V5 => ConnAck {
+    //             session_present,
+    //             code: connect_return_v5(return_code)?,
+    //             properties: ConnAckProperties::extract(&mut bytes)?,
+    //         },
+    //     };
 
-        Ok(connack)
-    }
+    //     Ok(connack)
+    // }
 
     // pub fn read(fixed_header: FixedHeader, bytes: Bytes) -> Result<Self, Error> {
     //     Self::decode(Protocol::V5, fixed_header, bytes)
@@ -126,6 +126,37 @@ impl ConnAck {
     // pub fn write(&self, buffer: &mut BytesMut) -> Result<usize, Error> {
     //     self.encode(Protocol::V5, buffer)
     // }
+}
+
+impl PacketDecoder for ConnAck {
+    fn decode<B: Buf>(
+        protocol: Protocol,
+        fixed_header: &FixedHeader,
+        bytes: &mut B,
+    ) -> Result<Self> {
+        let variable_header_index = fixed_header.fixed_header_len;
+        bytes.advance(variable_header_index);
+
+        let flags = read_u8(bytes)?;
+        let return_code = read_u8(bytes)?;
+
+        let session_present = (flags & 0x01) == 1;
+
+        let connack = match protocol {
+            Protocol::V4 => ConnAck {
+                session_present,
+                code: connect_return_v4(return_code)?,
+                properties: None,
+            },
+            Protocol::V5 => ConnAck {
+                session_present,
+                code: connect_return_v5(return_code)?,
+                properties: ConnAckProperties::extract(bytes)?,
+            },
+        };
+
+        Ok(connack)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -246,7 +277,7 @@ impl ConnAckProperties {
         len
     }
 
-    pub fn extract(mut bytes: &mut Bytes) -> Result<Option<ConnAckProperties>, Error> {
+    pub fn extract<B: Buf>(mut bytes: &mut B) -> Result<Option<ConnAckProperties>, Error> {
         let mut session_expiry_interval = None;
         let mut receive_max = None;
         let mut max_qos = None;
@@ -265,8 +296,9 @@ impl ConnAckProperties {
         let mut authentication_method = None;
         let mut authentication_data = None;
 
-        let (properties_len_len, properties_len) = length(bytes.iter())?;
-        bytes.advance(properties_len_len);
+        // let (properties_len_len, properties_len) = length(bytes.iter())?;
+        // bytes.advance(properties_len_len);
+        let (_properties_len_len, properties_len) = parse_length(bytes)?;
         if properties_len == 0 {
             return Ok(None);
         }
@@ -584,10 +616,10 @@ mod test {
         let packetstream = &sample_bytes();
         stream.extend_from_slice(&packetstream[..]);
 
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
-        let connack_bytes = stream.split_to(fixed_header.frame_length()).freeze();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
+        let mut connack_bytes = stream.split_to(fixed_header.frame_length()).freeze();
         //let connack = ConnAck::read(fixed_header, connack_bytes).unwrap();
-        let connack = ConnAck::decode(Protocol::V5, fixed_header, connack_bytes).unwrap();
+        let connack = ConnAck::decode(Protocol::V5, &fixed_header, &mut connack_bytes).unwrap();
 
         assert_eq!(connack, sample());
     }

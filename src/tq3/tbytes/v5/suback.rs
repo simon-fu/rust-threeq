@@ -1,6 +1,6 @@
 use super::*;
 use alloc::vec::Vec;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use std::convert::{TryFrom, TryInto};
 
 /// Acknowledgement to subscribe
@@ -40,39 +40,39 @@ impl SubAck {
         len
     }
 
-    pub fn decode(
-        protocol: Protocol,
-        fixed_header: FixedHeader,
-        mut bytes: Bytes,
-    ) -> Result<Self, Error> {
-        let variable_header_index = fixed_header.fixed_header_len;
-        bytes.advance(variable_header_index);
+    // pub fn decode(
+    //     protocol: Protocol,
+    //     fixed_header: FixedHeader,
+    //     mut bytes: Bytes,
+    // ) -> Result<Self, Error> {
+    //     let variable_header_index = fixed_header.fixed_header_len;
+    //     bytes.advance(variable_header_index);
 
-        let pkid = read_u16(&mut bytes)?;
-        let properties = if protocol == Protocol::V4 {
-            None
-        } else {
-            SubAckProperties::extract(&mut bytes)?
-        };
+    //     let pkid = read_u16(&mut bytes)?;
+    //     let properties = if protocol == Protocol::V4 {
+    //         None
+    //     } else {
+    //         SubAckProperties::extract(&mut bytes)?
+    //     };
 
-        if !bytes.has_remaining() {
-            return Err(Error::MalformedPacket);
-        }
+    //     if !bytes.has_remaining() {
+    //         return Err(Error::MalformedPacket);
+    //     }
 
-        let mut return_codes = Vec::new();
-        while bytes.has_remaining() {
-            let return_code = read_u8(&mut bytes)?;
-            return_codes.push(return_code.try_into()?);
-        }
+    //     let mut return_codes = Vec::new();
+    //     while bytes.has_remaining() {
+    //         let return_code = read_u8(&mut bytes)?;
+    //         return_codes.push(return_code.try_into()?);
+    //     }
 
-        let suback = SubAck {
-            pkid,
-            return_codes,
-            properties,
-        };
+    //     let suback = SubAck {
+    //         pkid,
+    //         return_codes,
+    //         properties,
+    //     };
 
-        Ok(suback)
-    }
+    //     Ok(suback)
+    // }
 
     pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         buffer.put_u8(0x90);
@@ -93,6 +93,42 @@ impl SubAck {
         let p: Vec<u8> = self.return_codes.iter().map(|code| *code as u8).collect();
         buffer.extend_from_slice(&p);
         Ok(1 + remaining_len_bytes + remaining_len)
+    }
+}
+
+impl PacketDecoder for SubAck {
+    fn decode<B: Buf>(
+        protocol: Protocol,
+        fixed_header: &FixedHeader,
+        bytes: &mut B,
+    ) -> Result<Self> {
+        let variable_header_index = fixed_header.fixed_header_len;
+        bytes.advance(variable_header_index);
+
+        let pkid = read_u16(bytes)?;
+        let properties = if protocol == Protocol::V4 {
+            None
+        } else {
+            SubAckProperties::extract(bytes)?
+        };
+
+        if !bytes.has_remaining() {
+            return Err(anyhow::Error::from(Error::MalformedPacket));
+        }
+
+        let mut return_codes = Vec::new();
+        while bytes.has_remaining() {
+            let return_code = read_u8(bytes)?;
+            return_codes.push(return_code.try_into()?);
+        }
+
+        let suback = SubAck {
+            pkid,
+            return_codes,
+            properties,
+        };
+
+        Ok(suback)
     }
 }
 
@@ -117,12 +153,13 @@ impl SubAckProperties {
         len
     }
 
-    pub fn extract(mut bytes: &mut Bytes) -> Result<Option<SubAckProperties>, Error> {
+    pub fn extract<B: Buf>(mut bytes: &mut B) -> Result<Option<SubAckProperties>, Error> {
         let mut reason_string = None;
         let mut user_properties = Vec::new();
 
-        let (properties_len_len, properties_len) = length(bytes.iter())?;
-        bytes.advance(properties_len_len);
+        // let (properties_len_len, properties_len) = length(bytes.iter())?;
+        // bytes.advance(properties_len_len);
+        let (_properties_len_len, properties_len) = parse_length(bytes)?;
         if properties_len == 0 {
             return Ok(None);
         }
@@ -274,9 +311,9 @@ mod test {
         let packetstream = &sample_bytes();
 
         stream.extend_from_slice(&packetstream[..]);
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
-        let suback_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let suback = SubAck::decode(Protocol::V5, fixed_header, suback_bytes).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
+        let mut suback_bytes = stream.split_to(fixed_header.frame_length()).freeze();
+        let suback = SubAck::decode(Protocol::V5, &fixed_header, &mut suback_bytes).unwrap();
         assert_eq!(suback, sample());
     }
 

@@ -1,7 +1,7 @@
 use super::*;
 use alloc::string::String;
 use alloc::vec::Vec;
-use bytes::{Buf, Bytes};
+use bytes::Buf;
 
 /// Unsubscribe packet
 #[derive(Debug, Clone, PartialEq)]
@@ -41,35 +41,35 @@ impl Unsubscribe {
         len
     }
 
-    pub fn decode(
-        protocol: Protocol,
-        fixed_header: FixedHeader,
-        mut bytes: Bytes,
-    ) -> Result<Self, Error> {
-        let variable_header_index = fixed_header.fixed_header_len;
-        bytes.advance(variable_header_index);
+    // pub fn decode(
+    //     protocol: Protocol,
+    //     fixed_header: FixedHeader,
+    //     mut bytes: Bytes,
+    // ) -> Result<Self, Error> {
+    //     let variable_header_index = fixed_header.fixed_header_len;
+    //     bytes.advance(variable_header_index);
 
-        let pkid = read_u16(&mut bytes)?;
-        //dbg!(pkid);
-        let properties = if protocol == Protocol::V4 {
-            None
-        } else {
-            UnsubscribeProperties::extract(&mut bytes)?
-        };
+    //     let pkid = read_u16(&mut bytes)?;
+    //     //dbg!(pkid);
+    //     let properties = if protocol == Protocol::V4 {
+    //         None
+    //     } else {
+    //         UnsubscribeProperties::extract(&mut bytes)?
+    //     };
 
-        let mut filters = Vec::with_capacity(1);
-        while bytes.has_remaining() {
-            let filter = read_mqtt_string(&mut bytes)?;
-            filters.push(filter);
-        }
+    //     let mut filters = Vec::with_capacity(1);
+    //     while bytes.has_remaining() {
+    //         let filter = read_mqtt_string(&mut bytes)?;
+    //         filters.push(filter);
+    //     }
 
-        let unsubscribe = Unsubscribe {
-            pkid,
-            filters,
-            properties,
-        };
-        Ok(unsubscribe)
-    }
+    //     let unsubscribe = Unsubscribe {
+    //         pkid,
+    //         filters,
+    //         properties,
+    //     };
+    //     Ok(unsubscribe)
+    // }
 
     pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         return self.encode_with_pktid(protocol, self.pkid, buffer);
@@ -108,6 +108,38 @@ impl Unsubscribe {
     }
 }
 
+impl PacketDecoder for Unsubscribe {
+    fn decode<B: Buf>(
+        protocol: Protocol,
+        fixed_header: &FixedHeader,
+        bytes: &mut B,
+    ) -> Result<Self> {
+        let variable_header_index = fixed_header.fixed_header_len;
+        bytes.advance(variable_header_index);
+
+        let pkid = read_u16(bytes)?;
+        //dbg!(pkid);
+        let properties = if protocol == Protocol::V4 {
+            None
+        } else {
+            UnsubscribeProperties::extract(bytes)?
+        };
+
+        let mut filters = Vec::with_capacity(1);
+        while bytes.has_remaining() {
+            let filter = read_mqtt_string(bytes)?;
+            filters.push(filter);
+        }
+
+        let unsubscribe = Unsubscribe {
+            pkid,
+            filters,
+            properties,
+        };
+        Ok(unsubscribe)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnsubscribeProperties {
     pub user_properties: Vec<(String, String)>,
@@ -124,12 +156,13 @@ impl UnsubscribeProperties {
         len
     }
 
-    fn extract(mut bytes: &mut Bytes) -> Result<Option<UnsubscribeProperties>, Error> {
+    fn extract<B: Buf>(mut bytes: &mut B) -> Result<Option<UnsubscribeProperties>, Error> {
         let mut user_properties = Vec::new();
 
-        let (properties_len_len, properties_len) = length(bytes.iter())?;
-        bytes.advance(properties_len_len);
+        // let (properties_len_len, properties_len) = length(bytes.iter())?;
+        // bytes.advance(properties_len_len);
 
+        let (_properties_len_len, properties_len) = parse_length(bytes)?;
         if properties_len == 0 {
             return Ok(None);
         }
@@ -207,10 +240,10 @@ mod test {
 
         stream.extend_from_slice(&packetstream[..]);
 
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
-        let unsubscribe_bytes = stream.split_to(fixed_header.frame_length()).freeze();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
+        let mut unsubscribe_bytes = stream.split_to(fixed_header.frame_length()).freeze();
         let unsubscribe =
-            Unsubscribe::decode(Protocol::V5, fixed_header, unsubscribe_bytes).unwrap();
+            Unsubscribe::decode(Protocol::V5, &fixed_header, &mut unsubscribe_bytes).unwrap();
         assert_eq!(unsubscribe, sample());
     }
 
@@ -246,9 +279,10 @@ mod test {
 
         stream.extend_from_slice(&packetstream[..]);
 
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
-        let subscribe_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let subscribe = Unsubscribe::decode(Protocol::V5, fixed_header, subscribe_bytes).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
+        let mut subscribe_bytes = stream.split_to(fixed_header.frame_length()).freeze();
+        let subscribe =
+            Unsubscribe::decode(Protocol::V5, &fixed_header, &mut subscribe_bytes).unwrap();
         assert_eq!(subscribe, sample2());
     }
 

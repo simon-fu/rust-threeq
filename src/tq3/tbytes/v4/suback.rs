@@ -97,7 +97,7 @@ mod test {
         ];
 
         let mut stream = BytesMut::from(&stream[..]);
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
         let ack_bytes = stream.split_to(fixed_header.frame_length()).freeze();
         let packet = SubAck::read(fixed_header, ack_bytes).unwrap();
 

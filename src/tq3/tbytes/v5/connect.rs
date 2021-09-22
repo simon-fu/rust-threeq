@@ -80,49 +80,49 @@ impl Connect {
         len
     }
 
-    pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Connect, Error> {
-        let variable_header_index = fixed_header.fixed_header_len;
-        bytes.advance(variable_header_index);
+    // pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Connect, Error> {
+    //     let variable_header_index = fixed_header.fixed_header_len;
+    //     bytes.advance(variable_header_index);
 
-        // Variable header
-        let protocol_name = read_mqtt_string(&mut bytes)?;
-        let protocol_level = read_u8(&mut bytes)?;
-        if protocol_name != "MQTT" {
-            return Err(Error::InvalidProtocol);
-        }
+    //     // Variable header
+    //     let protocol_name = read_mqtt_string(&mut bytes)?;
+    //     let protocol_level = read_u8(&mut bytes)?;
+    //     if protocol_name != "MQTT" {
+    //         return Err(Error::InvalidProtocol);
+    //     }
 
-        let protocol = match protocol_level {
-            4 => Protocol::V4,
-            5 => Protocol::V5,
-            num => return Err(Error::InvalidProtocolLevel(num)),
-        };
+    //     let protocol = match protocol_level {
+    //         4 => Protocol::V4,
+    //         5 => Protocol::V5,
+    //         num => return Err(Error::InvalidProtocolLevel(num)),
+    //     };
 
-        let connect_flags = read_u8(&mut bytes)?;
-        let clean_session = (connect_flags & 0b10) != 0;
-        let keep_alive = read_u16(&mut bytes)?;
+    //     let connect_flags = read_u8(&mut bytes)?;
+    //     let clean_session = (connect_flags & 0b10) != 0;
+    //     let keep_alive = read_u16(&mut bytes)?;
 
-        // Properties in variable header
-        let properties = match protocol {
-            Protocol::V5 => ConnectProperties::read(&mut bytes)?,
-            Protocol::V4 => None,
-        };
+    //     // Properties in variable header
+    //     let properties = match protocol {
+    //         Protocol::V5 => ConnectProperties::read(&mut bytes)?,
+    //         Protocol::V4 => None,
+    //     };
 
-        let client_id = read_mqtt_string(&mut bytes)?;
-        let last_will = LastWill::read(protocol, connect_flags, &mut bytes)?;
-        let login = Login::read(connect_flags, &mut bytes)?;
+    //     let client_id = read_mqtt_string(&mut bytes)?;
+    //     let last_will = LastWill::read(protocol, connect_flags, &mut bytes)?;
+    //     let login = Login::read(connect_flags, &mut bytes)?;
 
-        let connect = Connect {
-            protocol,
-            keep_alive,
-            properties,
-            client_id,
-            clean_session,
-            last_will,
-            login,
-        };
+    //     let connect = Connect {
+    //         protocol,
+    //         keep_alive,
+    //         properties,
+    //         client_id,
+    //         clean_session,
+    //         last_will,
+    //         login,
+    //     };
 
-        Ok(connect)
-    }
+    //     Ok(connect)
+    // }
 
     pub fn write(&self, buffer: &mut BytesMut) -> Result<usize, Error> {
         let len = self.len();
@@ -167,6 +167,56 @@ impl Connect {
         // update connect flags
         buffer[flags_index] = connect_flags;
         Ok(len)
+    }
+}
+
+impl PacketDecoder for Connect {
+    fn decode<B: Buf>(
+        _protocol: Protocol,
+        fixed_header: &FixedHeader,
+        bytes: &mut B,
+    ) -> Result<Self> {
+        let variable_header_index = fixed_header.fixed_header_len;
+        bytes.advance(variable_header_index);
+
+        // Variable header
+        let protocol_name = read_mqtt_string(bytes)?;
+        let protocol_level = read_u8(bytes)?;
+        if protocol_name != "MQTT" {
+            return Err(anyhow::Error::from(Error::InvalidProtocol));
+        }
+
+        let protocol = match protocol_level {
+            4 => Protocol::V4,
+            5 => Protocol::V5,
+            num => return Err(anyhow::Error::from(Error::InvalidProtocolLevel(num))),
+        };
+
+        let connect_flags = read_u8(bytes)?;
+        let clean_session = (connect_flags & 0b10) != 0;
+        let keep_alive = read_u16(bytes)?;
+
+        // Properties in variable header
+        let properties = match protocol {
+            Protocol::V5 => ConnectProperties::read(bytes)?,
+            Protocol::V4 => None,
+        };
+
+        let client_id = read_mqtt_string(bytes)?;
+        let last_will = LastWill::read(protocol, connect_flags, bytes)?;
+        let login = Login::read(connect_flags, bytes)?;
+
+        let connect = Connect {
+            protocol,
+            keep_alive,
+            properties,
+            client_id,
+            clean_session,
+            last_will,
+            login,
+        };
+
+        Ok(connect)
     }
 }
 
@@ -217,10 +267,10 @@ impl LastWill {
         len
     }
 
-    fn read(
+    fn read<B: Buf>(
         protocol: Protocol,
         connect_flags: u8,
-        mut bytes: &mut Bytes,
+        mut bytes: &mut B,
     ) -> Result<Option<LastWill>, Error> {
         let last_will = match connect_flags & 0b100 {
             0 if (connect_flags & 0b0011_1000) != 0 => {
@@ -320,7 +370,7 @@ impl WillProperties {
         len
     }
 
-    fn read(mut bytes: &mut Bytes) -> Result<Option<WillProperties>, Error> {
+    fn read<B: Buf>(mut bytes: &mut B) -> Result<Option<WillProperties>, Error> {
         let mut delay_interval = None;
         let mut payload_format_indicator = None;
         let mut message_expiry_interval = None;
@@ -329,8 +379,9 @@ impl WillProperties {
         let mut correlation_data = None;
         let mut user_properties = Vec::new();
 
-        let (properties_len_len, properties_len) = length(bytes.iter())?;
-        bytes.advance(properties_len_len);
+        //let (properties_len_len, properties_len) = length(bytes.iter())?;
+        // bytes.advance(properties_len_len);
+        let (_properties_len_len, properties_len) = parse_length(bytes)?;
         if properties_len == 0 {
             return Ok(None);
         }
@@ -448,7 +499,7 @@ impl Login {
         }
     }
 
-    fn read(connect_flags: u8, mut bytes: &mut Bytes) -> Result<Option<Login>, Error> {
+    fn read<B: Buf>(connect_flags: u8, mut bytes: &mut B) -> Result<Option<Login>, Error> {
         let username = match connect_flags & 0b1000_0000 {
             0 => String::new(),
             _ => read_mqtt_string(&mut bytes)?,
@@ -531,7 +582,7 @@ impl ConnectProperties {
         }
     }
 
-    fn read(mut bytes: &mut Bytes) -> Result<Option<ConnectProperties>, Error> {
+    fn read<B: Buf>(mut bytes: &mut B) -> Result<Option<ConnectProperties>, Error> {
         let mut session_expiry_interval = None;
         let mut receive_maximum = None;
         let mut max_packet_size = None;
@@ -542,8 +593,9 @@ impl ConnectProperties {
         let mut authentication_method = None;
         let mut authentication_data = None;
 
-        let (properties_len_len, properties_len) = length(bytes.iter())?;
-        bytes.advance(properties_len_len);
+        // let (properties_len_len, properties_len) = length(bytes.iter())?;
+        // bytes.advance(properties_len_len);
+        let (_properties_len_len, properties_len) = parse_length(bytes)?;
         if properties_len == 0 {
             return Ok(None);
         }
@@ -806,9 +858,9 @@ mod test {
         let packetstream = &sample_bytes();
         stream.extend_from_slice(&packetstream[..]);
 
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
-        let connect_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let connect = Connect::read(fixed_header, connect_bytes).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
+        let mut connect_bytes = stream.split_to(fixed_header.frame_length()).freeze();
+        let connect = Connect::decode(Protocol::V5, &fixed_header, &mut connect_bytes).unwrap();
         assert_eq!(connect, sample());
     }
 
@@ -853,9 +905,9 @@ mod test {
         let packetstream = &sample2_bytes();
         stream.extend_from_slice(&packetstream[..]);
 
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
-        let connect_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let connect = Connect::read(fixed_header, connect_bytes).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
+        let mut connect_bytes = stream.split_to(fixed_header.frame_length()).freeze();
+        let connect = Connect::decode(Protocol::V5, &fixed_header, &mut connect_bytes).unwrap();
         assert_eq!(connect, sample2());
     }
 
@@ -925,9 +977,9 @@ mod test {
         let packetstream = &sample3_bytes();
         stream.extend_from_slice(&packetstream[..]);
 
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
-        let connect_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let connect = Connect::read(fixed_header, connect_bytes).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
+        let mut connect_bytes = stream.split_to(fixed_header.frame_length()).freeze();
+        let connect = Connect::decode(Protocol::V5, &fixed_header, &mut connect_bytes).unwrap();
         assert_eq!(connect, sample3());
     }
 

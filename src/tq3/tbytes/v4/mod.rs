@@ -50,7 +50,7 @@ pub enum Packet {
 
 /// Reads a stream of bytes and extracts next MQTT packet out of it
 pub fn read(stream: &mut BytesMut, max_size: usize) -> Result<Packet, Error> {
-    let fixed_header = check(stream.iter(), max_size)?;
+    let fixed_header = check(&stream[..], max_size)?;
 
     // Test with a stream with exactly the size to check border panics
     let packet = stream.split_to(fixed_header.frame_length());

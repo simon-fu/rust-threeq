@@ -327,7 +327,7 @@ mod test {
         ];
 
         stream.extend_from_slice(&packetstream[..]);
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
         let connect_bytes = stream.split_to(fixed_header.frame_length()).freeze();
         let packet = Connect::read(fixed_header, connect_bytes).unwrap();
 

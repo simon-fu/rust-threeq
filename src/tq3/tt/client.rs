@@ -35,7 +35,8 @@ Events:
 
 */
 
-use crate::tq3::tt;
+use crate::tq3::{tbytes::PacketDecoder, tt};
+use anyhow::{anyhow, bail, Result};
 use bytes::{Bytes, BytesMut};
 use core::panic;
 use std::{
@@ -105,7 +106,7 @@ pub enum Event {
 enum Response {
     Connected,
     Event(Event),
-    Error(Error),
+    Error(anyhow::Error),
 }
 type ResponseTX = oneshot::Sender<Response>;
 type ResponseRX = oneshot::Receiver<Response>;
@@ -118,7 +119,7 @@ async fn recv_rsp(rx: &mut ResponseRX) -> Result<Response, Error> {
     }
 }
 
-async fn recv_ev(rx: &mut ResponseRX) -> Result<Event, Error> {
+async fn recv_ev(rx: &mut ResponseRX) -> Result<Event> {
     match recv_rsp(rx).await? {
         Response::Event(ev) => Ok(ev),
         Response::Error(e) => Err(e),
@@ -126,16 +127,16 @@ async fn recv_ev(rx: &mut ResponseRX) -> Result<Event, Error> {
     }
 }
 
-async fn recv_pkt(rx: &mut ResponseRX) -> Result<tt::Packet, Error> {
+async fn recv_pkt(rx: &mut ResponseRX) -> Result<tt::Packet> {
     match recv_ev(rx).await? {
         Event::Packet(pkt) => Ok(pkt),
-        Event::Closed(_) => Err(Error::Generic("expect packet but closed".to_string())),
+        Event::Closed(_) => bail!("expect packet but closed".to_string()),
     }
 }
 
-async fn recv_closed(rx: &mut ResponseRX) -> Result<(), Error> {
+async fn recv_closed(rx: &mut ResponseRX) -> Result<()> {
     match recv_ev(rx).await? {
-        Event::Packet(_) => Err(Error::Generic("expect closed but packet".to_string())),
+        Event::Packet(_) => bail!("expect closed but packet".to_string()),
         Event::Closed(_) => Ok(()),
     }
 }
@@ -240,26 +241,26 @@ impl Session {
         }
     }
 
-    async fn rsp_packet(&mut self, tx: Option<ResponseTX>, pkt: tt::Packet) -> Result<(), Error> {
+    async fn rsp_packet(&mut self, tx: Option<ResponseTX>, pkt: tt::Packet) -> Result<()> {
         self.rsp_event(tx, Event::Packet(pkt)).await
     }
 
-    async fn rsp_error(&mut self, tx: Option<ResponseTX>, e: Error) -> Result<(), Error> {
+    async fn rsp_error(&mut self, tx: Option<ResponseTX>, e: anyhow::Error) -> Result<()> {
         self.rsp_rsp(tx, Response::Error(e)).await
     }
 
-    async fn rsp_event(&mut self, tx: Option<ResponseTX>, ev: Event) -> Result<(), Error> {
+    async fn rsp_event(&mut self, tx: Option<ResponseTX>, ev: Event) -> Result<()> {
         self.rsp_rsp(tx, Response::Event(ev)).await
     }
 
-    async fn rsp_rsp(&mut self, tx: Option<ResponseTX>, rsp: Response) -> Result<(), Error> {
+    async fn rsp_rsp(&mut self, tx: Option<ResponseTX>, rsp: Response) -> Result<()> {
         if let Some(tx0) = tx {
             let _ = tx0.send(rsp);
             return Ok(());
         }
 
         if let Err(_) = self.tx.send(rsp).await {
-            Err(Error::NoReceiver)
+            Err(anyhow::Error::from(Error::NoReceiver))
         } else {
             Ok(())
         }
@@ -268,12 +269,12 @@ impl Session {
     async fn handle_connack(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         _obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         self.check_state(State::Connecting, "handle_connack")?;
 
-        let pkt = tt::ConnAck::decode(self.get_protocol(), fixed_header, bytes)?;
+        let pkt = tt::ConnAck::decode(self.get_protocol(), &fixed_header, &mut bytes)?;
         trace_input!(pkt);
 
         self.state = State::Working;
@@ -298,24 +299,24 @@ impl Session {
             }
             self.rsp_packet(req.tx, tt::Packet::ConnAck(pkt)).await
         } else {
-            Err(Error::Generic(format!("{:?} unexpect connack", pkt)))
+            bail!(format!("{:?} unexpect connack", pkt));
         }
     }
 
     async fn handle_publish(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         self.check_working_state("handle_publish")?;
 
-        let pkt = tt::Publish::decode(self.get_protocol(), fixed_header, bytes)?;
+        let pkt = tt::Publish::decode(self.get_protocol(), &fixed_header, &mut bytes)?;
         trace_input!(pkt);
 
         let req = self.qos2_rsp.get(&pkt.pkid);
         if req.is_some() {
-            return Err(Error::Generic(format!("{:?} unexpect publish", req)));
+            bail!(format!("{:?} unexpect publish", req));
         }
 
         match pkt.qos {
@@ -341,12 +342,12 @@ impl Session {
     async fn handle_suback(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         _obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         self.check_working_state("handle_suback")?;
 
-        let pkt = tt::SubAck::decode(self.get_protocol(), fixed_header, bytes)?;
+        let pkt = tt::SubAck::decode(self.get_protocol(), &fixed_header, &mut bytes)?;
         trace_input!(pkt);
 
         let req = self
@@ -357,19 +358,19 @@ impl Session {
         if let tt::Packet::Subscribe(_) = req.req.ref_pkt()? {
             self.rsp_packet(req.tx, tt::Packet::SubAck(pkt)).await
         } else {
-            Err(Error::Generic(format!("{:?} unexpect suback", pkt)))
+            bail!(format!("{:?} unexpect suback", pkt));
         }
     }
 
     async fn handle_unsuback(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         _obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         self.check_working_state("handle_unsuback")?;
 
-        let pkt = tt::UnsubAck::decode(self.get_protocol(), fixed_header, bytes)?;
+        let pkt = tt::UnsubAck::decode(self.get_protocol(), &fixed_header, &mut bytes)?;
         trace_input!(pkt);
 
         let req = self
@@ -380,19 +381,19 @@ impl Session {
         if let tt::Packet::Unsubscribe(_) = req.req.ref_pkt()? {
             self.rsp_packet(req.tx, tt::Packet::UnsubAck(pkt)).await
         } else {
-            Err(Error::Generic(format!("{:?} unexpect unsubnack", pkt)))
+            bail!(format!("{:?} unexpect unsubnack", pkt));
         }
     }
 
     async fn handle_puback(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         _obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         self.check_working_state("handle_puback")?;
 
-        let pkt = tt::PubAck::decode(self.get_protocol(), fixed_header, bytes)?;
+        let pkt = tt::PubAck::decode(self.get_protocol(), &fixed_header, &mut bytes)?;
         trace_input!(pkt);
 
         let req = self
@@ -405,21 +406,18 @@ impl Session {
                 return self.rsp_packet(req.tx, tt::Packet::PubAck(pkt)).await;
             }
         }
-        Err(Error::Generic(format!(
-            "req {:?} but got puback {:?}",
-            req.req, pkt
-        )))
+        bail!(format!("req {:?} but got puback {:?}", req.req, pkt));
     }
 
     async fn handle_pubrec(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         self.check_working_state("handle_pubrec")?;
 
-        let pkt = tt::PubRec::decode(self.get_protocol(), fixed_header, bytes)?;
+        let pkt = tt::PubRec::decode(self.get_protocol(), &fixed_header, &mut bytes)?;
         trace_input!(pkt);
 
         let req = self
@@ -454,18 +452,18 @@ impl Session {
             _ => {}
         }
 
-        Err(Error::Generic(format!("{:?} unexpect pubrec", pkt)))
+        bail!(format!("{:?} unexpect pubrec", pkt));
     }
 
     async fn handle_pubrel(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         self.check_working_state("handle_pubrec")?;
 
-        let pkt = tt::PubRel::decode(self.get_protocol(), fixed_header, bytes)?;
+        let pkt = tt::PubRel::decode(self.get_protocol(), &fixed_header, &mut bytes)?;
         trace_input!(pkt);
 
         let req = self
@@ -479,19 +477,19 @@ impl Session {
             trace_output!(comp);
             Ok(())
         } else {
-            Err(Error::Generic(format!("{:?} unexpect pubrel", pkt)))
+            bail!(format!("{:?} unexpect pubrel", pkt));
         }
     }
 
     async fn handle_pubcomp(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         _obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         self.check_working_state("handle_pubcomp")?;
 
-        let pkt = tt::PubComp::decode(self.get_protocol(), fixed_header, bytes)?;
+        let pkt = tt::PubComp::decode(self.get_protocol(), &fixed_header, &mut bytes)?;
         trace_input!(pkt);
 
         let req = self
@@ -502,7 +500,7 @@ impl Session {
         if let tt::Packet::PubRel(_) = req.req.ref_pkt()? {
             return self.rsp_packet(req.tx, tt::Packet::PubComp(pkt)).await;
         }
-        Err(Error::Generic(format!("{:?} unexpect pubcomp", pkt)))
+        bail!(format!("{:?} unexpect pubcomp", pkt));
     }
 
     async fn handle_pingresp(
@@ -510,7 +508,7 @@ impl Session {
         _fixed_header: tt::FixedHeader,
         _bytes: Bytes,
         _obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         self.check_working_state("handle_pingresp")?;
 
         trace_input!(tt::Packet::PingResp);
@@ -521,30 +519,26 @@ impl Session {
     async fn handle_disconnect(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         _obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         self.check_working_state("handle_disconnect")?;
 
-        let pkt = tt::Disconnect::decode(self.get_protocol(), fixed_header, bytes)?;
+        let pkt = tt::Disconnect::decode(self.get_protocol(), &fixed_header, &mut bytes)?;
         trace_input!(pkt);
         if self.get_protocol() == tt::Protocol::V4 {
-            return Err(Error::Generic("V4 got disconnect".to_string()));
+            bail!("V4 got disconnect".to_string());
         }
 
         return self.rsp_packet(None, tt::Packet::Disconnect(pkt)).await;
     }
 
-    async fn handle_incoming(
-        &mut self,
-        ibuf: &mut BytesMut,
-        obuf: &mut BytesMut,
-    ) -> Result<(), Error> {
+    async fn handle_incoming(&mut self, ibuf: &mut BytesMut, obuf: &mut BytesMut) -> Result<()> {
         while self.state != State::Closed {
             let r = tt::check(ibuf.iter(), self.max_incoming_size);
             match r {
                 Err(tt::Error::InsufficientBytes(_required)) => return Ok(()),
-                Err(e) => return Err(Error::Tt(e)),
+                Err(e) => return Err(anyhow::Error::from(e)),
                 Ok(h) => {
                     let bytes = ibuf.split_to(h.frame_length()).freeze();
                     let packet_type = tt::PacketType::try_from(h.get_type_byte())?;
@@ -595,10 +589,7 @@ impl Session {
                         }
 
                         _ => {
-                            return Err(Error::Generic(format!(
-                                "incoming unexpect {:?}",
-                                packet_type
-                            )));
+                            bail!(format!("incoming unexpect {:?}", packet_type));
                         }
                     }
                 }
@@ -607,7 +598,7 @@ impl Session {
         Ok(())
     }
 
-    async fn response_disconnect(&mut self, reason: &str) -> Result<(), Error> {
+    async fn response_disconnect(&mut self, reason: &str) -> Result<()> {
         match self.inflight.remove(&self.pktid.get()) {
             Some(req) => self.rsp_event(req.tx, Event::Closed(reason.into())).await?,
             None => {}
@@ -616,14 +607,14 @@ impl Session {
         self.rsp_event(None, Event::Closed(reason.into())).await
     }
 
-    async fn response_inflight_error(&mut self, reason: &str) -> Result<(), Error> {
+    async fn response_inflight_error(&mut self, reason: &str) -> Result<()> {
         let mut txx: Vec<Option<ResponseTX>> = Default::default();
         for (_, v) in self.inflight.drain() {
             txx.push(v.tx);
         }
 
         for tx in txx {
-            let e = Error::Generic(reason.into());
+            let e = anyhow!("{}", reason);
             let _ = self.rsp_error(tx, e).await;
         }
 
@@ -770,7 +761,7 @@ async fn task_entry(
     mut socket: TcpStream,
     mut req_rx: mpsc::Receiver<Request>,
     session: &mut Session,
-) -> Result<(), Error> {
+) -> Result<()> {
     let (mut rd, mut wr) = socket.split();
     let mut ibuf = bytes::BytesMut::with_capacity(64);
     let mut obuf = bytes::BytesMut::with_capacity(64);
@@ -788,7 +779,7 @@ async fn task_entry(
                     Ok(n) => n,
                     Err(e) => {
                         debug!("read socket fail, {:?}", e);
-                        return Err(Error::Io(e))
+                        return Err(anyhow::Error::from(e))
                     },
                 };
                 if len == 0 {
@@ -797,7 +788,8 @@ async fn task_entry(
                         session.response_disconnect("active disconnect").await?;
                         break;
                     } else {
-                        return Err(Error::Broken("read disconnected".to_string()));
+                        let e = Error::Broken("read disconnected".to_string());
+                        return Err(anyhow::Error::from(e));
                     }
                 }
                 session.handle_incoming(&mut ibuf, &mut obuf).await?
@@ -829,7 +821,7 @@ async fn task_entry(
     Ok(())
 }
 
-pub async fn make_connection(name: &str, addr: &str) -> Result<Client, Error> {
+pub async fn make_connection(name: &str, addr: &str) -> Result<Client> {
     // trace!("connecting to [{}]...", addr);
     // let socket = match TcpStream::connect(addr).await{
     //     Ok(h) => h,
@@ -851,7 +843,7 @@ pub async fn make_connection(name: &str, addr: &str) -> Result<Client, Error> {
             Err(e) => {
                 let e = Error::Generic(format!("unable to connect {}, {}", &addr, e.to_string()));
                 debug!("{}", e.to_string());
-                let _r = ev_tx.send(Response::Error(e)).await;
+                let _r = ev_tx.send(Response::Error(anyhow::Error::from(e))).await;
                 return;
                 //return Err(e);
             }
@@ -912,7 +904,7 @@ pub struct Receiver {
 }
 
 impl Receiver {
-    pub async fn recv(&mut self) -> Result<Event, Error> {
+    pub async fn recv(&mut self) -> Result<Event> {
         let rsp = self.rx.recv().await.ok_or_else(|| Error::Finished)?;
         match rsp {
             Response::Event(ev) => Ok(ev),
@@ -934,7 +926,7 @@ impl PublishFuture {
 }
 
 impl futures::Future for PublishFuture {
-    type Output = Result<(), Error>;
+    type Output = Result<()>;
     // type Output = Result<M, Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -955,7 +947,7 @@ impl futures::Future for PublishFuture {
                 let pkt = match event {
                     Event::Packet(pkt) => pkt,
                     Event::Closed(r) => {
-                        let e = Error::Generic(format!("expect packet but closed with [{}]", r));
+                        let e = anyhow!("expect packet but closed with [{}]", r);
                         return Poll::Ready(Err(e));
                     }
                 };
@@ -966,7 +958,7 @@ impl futures::Future for PublishFuture {
                         if let tt::Packet::PubAck(_r) = pkt {
                             Poll::Ready(Ok(()))
                         } else {
-                            let e = Error::Generic(format!("response expect PubAck but {:?}", pkt));
+                            let e = anyhow!("response expect PubAck but {:?}", pkt);
                             Poll::Ready(Err(e))
                         }
                     }
@@ -974,8 +966,7 @@ impl futures::Future for PublishFuture {
                         if let tt::Packet::PubComp(_) = pkt {
                             Poll::Ready(Ok(()))
                         } else {
-                            let e =
-                                Error::Generic(format!("response expect PubComp but {:?}", pkt));
+                            let e = anyhow!("response expect PubComp but {:?}", pkt);
                             Poll::Ready(Err(e))
                         }
                     }
@@ -997,7 +988,7 @@ pub struct Sender {
 }
 
 impl Sender {
-    pub async fn connect(&mut self, pkt: tt::Connect) -> Result<tt::ConnAck, Error> {
+    pub async fn connect(&mut self, pkt: tt::Connect) -> Result<tt::ConnAck> {
         let (tx, mut rx) = oneshot::channel();
 
         if let Err(_) = self
@@ -1008,7 +999,7 @@ impl Sender {
             })
             .await
         {
-            return Err(Error::Finished);
+            return Err(anyhow::Error::from(Error::Finished));
         }
 
         let pkt = recv_pkt(&mut rx).await?;
@@ -1016,11 +1007,11 @@ impl Sender {
         if let tt::Packet::ConnAck(ack) = pkt {
             Ok(ack)
         } else {
-            Err(Error::Generic("response expect ConnAck".to_string()))
+            bail!("response expect ConnAck".to_string());
         }
     }
 
-    pub async fn disconnect(&mut self, pkt: tt::Disconnect) -> Result<(), Error> {
+    pub async fn disconnect(&mut self, pkt: tt::Disconnect) -> Result<()> {
         let (tx, mut rx) = oneshot::channel();
 
         if let Err(_) = self
@@ -1031,13 +1022,13 @@ impl Sender {
             })
             .await
         {
-            return Err(Error::Finished);
+            return Err(anyhow::Error::from(Error::Finished));
         }
 
         return recv_closed(&mut rx).await;
     }
 
-    pub async fn shutdown(&mut self) -> Result<(), Error> {
+    pub async fn shutdown(&mut self) -> Result<()> {
         if let Err(_) = self
             .tx
             .send(Request {
@@ -1046,13 +1037,13 @@ impl Sender {
             })
             .await
         {
-            return Err(Error::Finished);
+            return Err(anyhow::Error::from(Error::Finished));
         }
 
         return Ok(());
     }
 
-    pub async fn subscribe(&mut self, pkt: tt::Subscribe) -> Result<tt::SubAck, Error> {
+    pub async fn subscribe(&mut self, pkt: tt::Subscribe) -> Result<tt::SubAck> {
         let (tx, mut rx) = oneshot::channel();
 
         if let Err(_) = self
@@ -1063,7 +1054,7 @@ impl Sender {
             })
             .await
         {
-            return Err(Error::Finished);
+            return Err(anyhow::Error::from(Error::Finished));
         }
 
         let pkt = recv_pkt(&mut rx).await?;
@@ -1071,11 +1062,11 @@ impl Sender {
         if let tt::Packet::SubAck(ack) = pkt {
             Ok(ack)
         } else {
-            Err(Error::Generic("response expect SubAck".to_string()))
+            bail!("response expect SubAck".to_string());
         }
     }
 
-    pub async fn unsubscribe(&mut self, pkt: tt::Unsubscribe) -> Result<tt::UnsubAck, Error> {
+    pub async fn unsubscribe(&mut self, pkt: tt::Unsubscribe) -> Result<tt::UnsubAck> {
         let (tx, mut rx) = oneshot::channel();
 
         if let Err(_) = self
@@ -1086,7 +1077,7 @@ impl Sender {
             })
             .await
         {
-            return Err(Error::Finished);
+            return Err(anyhow::Error::from(Error::Finished));
         }
 
         let pkt = recv_pkt(&mut rx).await?;
@@ -1094,12 +1085,12 @@ impl Sender {
         if let tt::Packet::UnsubAck(ack) = pkt {
             Ok(ack)
         } else {
-            Err(Error::Generic("response expect UnsubAck".to_string()))
+            bail!("response expect UnsubAck".to_string())
         }
     }
 
     // publish QoS0~2
-    pub async fn publish(&mut self, pkt: tt::Publish) -> Result<(), Error> {
+    pub async fn publish(&mut self, pkt: tt::Publish) -> Result<()> {
         // QoS0, send direcly and return
         if pkt.qos == tt::QoS::AtMostOnce {
             if let Err(_) = self
@@ -1110,7 +1101,7 @@ impl Sender {
                 })
                 .await
             {
-                return Err(Error::Finished);
+                return Err(anyhow::Error::from(Error::Finished));
             }
             return Ok(());
         }
@@ -1127,7 +1118,7 @@ impl Sender {
             })
             .await
         {
-            return Err(Error::Finished);
+            return Err(anyhow::Error::from(Error::Finished));
         }
 
         let pkt = recv_pkt(&mut rx).await?;
@@ -1137,20 +1128,20 @@ impl Sender {
                 if let tt::Packet::PubAck(_) = pkt {
                     Ok(())
                 } else {
-                    Err(Error::Generic("response expect PubAck".to_string()))
+                    bail!("response expect PubAck".to_string())
                 }
             }
             tt::QoS::ExactlyOnce => {
                 if let tt::Packet::PubComp(_) = pkt {
                     Ok(())
                 } else {
-                    Err(Error::Generic("response expect PubAck".to_string()))
+                    bail!("response expect PubAck".to_string())
                 }
             }
         }
     }
 
-    pub async fn publish_result(&mut self, pkt: tt::Publish) -> Result<PublishFuture, Error> {
+    pub async fn publish_result(&mut self, pkt: tt::Publish) -> Result<PublishFuture> {
         let qos = pkt.qos;
 
         let (tx, rx) = oneshot::channel();
@@ -1169,7 +1160,7 @@ impl Sender {
             })
             .await
         {
-            return Err(Error::Finished);
+            return Err(anyhow::Error::from(Error::Finished));
         }
 
         Ok(PublishFuture::new(rx, qos))
@@ -1235,7 +1226,7 @@ impl SyncClient {
         }
     }
 
-    pub async fn connect(&mut self, addr: &str, pkt: &tt::Connect) -> Result<tt::ConnAck, Error> {
+    pub async fn connect(&mut self, addr: &str, pkt: &tt::Connect) -> Result<tt::ConnAck> {
         let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
         async move {
             trace!("connecting to [{}]...", addr);
@@ -1250,8 +1241,8 @@ impl SyncClient {
             socket.write_all_buf(&mut obuf).await?;
             self.socket = Some(socket);
 
-            let (h, bytes) = self.recv_specific_packet(tt::PacketType::ConnAck).await?;
-            let ack = tt::ConnAck::decode(self.protocol, h, bytes)?;
+            let (h, mut bytes) = self.recv_specific_packet(tt::PacketType::ConnAck).await?;
+            let ack = tt::ConnAck::decode(self.protocol, &h, &mut bytes)?;
             trace_input!(ack);
             Ok(ack)
         }
@@ -1259,7 +1250,7 @@ impl SyncClient {
         .await
     }
 
-    pub async fn subscribe(&mut self, pkt: &tt::Subscribe) -> Result<tt::SubAck, Error> {
+    pub async fn subscribe(&mut self, pkt: &tt::Subscribe) -> Result<tt::SubAck> {
         let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
         async move {
             let pktid = self.pktid.next().unwrap();
@@ -1268,8 +1259,8 @@ impl SyncClient {
             pkt.encode_with_pktid(self.protocol, pktid, &mut obuf)?;
             trace_output!(pkt);
             socket.write_all_buf(&mut obuf).await?;
-            let (h, bytes) = self.recv_specific_packet(tt::PacketType::SubAck).await?;
-            let ack = tt::SubAck::decode(self.protocol, h, bytes)?;
+            let (h, mut bytes) = self.recv_specific_packet(tt::PacketType::SubAck).await?;
+            let ack = tt::SubAck::decode(self.protocol, &h, &mut bytes)?;
             trace_input!(ack);
             Ok(ack)
         }
@@ -1277,7 +1268,7 @@ impl SyncClient {
         .await
     }
 
-    pub async fn unsubscribe(&mut self, pkt: &tt::Unsubscribe) -> Result<tt::UnsubAck, Error> {
+    pub async fn unsubscribe(&mut self, pkt: &tt::Unsubscribe) -> Result<tt::UnsubAck> {
         let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
         async move {
             let pktid = self.pktid.next().unwrap();
@@ -1286,8 +1277,8 @@ impl SyncClient {
             pkt.encode_with_pktid(self.protocol, pktid, &mut obuf)?;
             trace_output!(pkt);
             socket.write_all_buf(&mut obuf).await?;
-            let (h, bytes) = self.recv_specific_packet(tt::PacketType::UnsubAck).await?;
-            let ack = tt::UnsubAck::decode(self.protocol, h, bytes)?;
+            let (h, mut bytes) = self.recv_specific_packet(tt::PacketType::UnsubAck).await?;
+            let ack = tt::UnsubAck::decode(self.protocol, &h, &mut bytes)?;
             trace_input!(ack);
             Ok(ack)
         }
@@ -1295,7 +1286,7 @@ impl SyncClient {
         .await
     }
 
-    pub async fn publish(&mut self, pkt: &tt::Publish) -> Result<(), Error> {
+    pub async fn publish(&mut self, pkt: &tt::Publish) -> Result<()> {
         let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
         async move {
             let pktid = self.pktid.next().unwrap();
@@ -1312,21 +1303,21 @@ impl SyncClient {
                     return Ok(());
                 }
                 tt::QoS::AtLeastOnce => {
-                    let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubAck).await?;
-                    let ack = tt::PubAck::decode(self.protocol, h, bytes)?;
+                    let (h, mut bytes) = self.recv_specific_packet(tt::PacketType::PubAck).await?;
+                    let ack = tt::PubAck::decode(self.protocol, &h, &mut bytes)?;
                     trace_input!(ack);
                     if ack.reason != tt::PubAckReason::Success {
-                        return Err(Error::Generic(format!("puback reason {:?}", ack.reason)));
+                        bail!(format!("puback reason {:?}", ack.reason));
                     } else {
                         return Ok(());
                     }
                 }
                 tt::QoS::ExactlyOnce => {
-                    let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubRec).await?;
-                    let rec = tt::PubRec::decode(self.protocol, h, bytes)?;
+                    let (h, mut bytes) = self.recv_specific_packet(tt::PacketType::PubRec).await?;
+                    let rec = tt::PubRec::decode(self.protocol, &h, &mut bytes)?;
                     trace_input!(rec);
                     if rec.reason != tt::PubRecReason::Success {
-                        return Err(Error::Generic(format!("pubrec reason {:?}", rec.reason)));
+                        bail!(format!("pubrec reason {:?}", rec.reason));
                     }
 
                     let socket = self.socket.as_mut().unwrap();
@@ -1337,11 +1328,11 @@ impl SyncClient {
                     trace_output!(rel);
                     socket.write_all_buf(&mut obuf).await?;
 
-                    let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubComp).await?;
-                    let comp = tt::PubComp::decode(self.protocol, h, bytes)?;
+                    let (h, mut bytes) = self.recv_specific_packet(tt::PacketType::PubComp).await?;
+                    let comp = tt::PubComp::decode(self.protocol, &h, &mut bytes)?;
                     trace_input!(comp);
                     if comp.reason != tt::PubCompReason::Success {
-                        return Err(Error::Generic(format!("pubcomp reason {:?}", rec.reason)));
+                        bail!(format!("pubcomp reason {:?}", rec.reason));
                     }
 
                     return Ok(());
@@ -1352,11 +1343,11 @@ impl SyncClient {
         .await
     }
 
-    pub async fn recv_publish(&mut self) -> Result<tt::Publish, Error> {
+    pub async fn recv_publish(&mut self) -> Result<tt::Publish> {
         let span = tracing::span!(tracing::Level::DEBUG, "", c = &self.name[..]);
         async move {
-            let (h, bytes) = self.recv_specific_packet(tt::PacketType::Publish).await?;
-            let pkt = tt::Publish::decode(self.protocol, h, bytes)?;
+            let (h, mut bytes) = self.recv_specific_packet(tt::PacketType::Publish).await?;
+            let pkt = tt::Publish::decode(self.protocol, &h, &mut bytes)?;
             trace_input!(pkt);
             match pkt.qos {
                 tt::QoS::AtMostOnce => {}
@@ -1377,13 +1368,11 @@ impl SyncClient {
                     }
 
                     {
-                        let (h, bytes) = self.recv_specific_packet(tt::PacketType::PubRel).await?;
-                        let rel = tt::PubRel::decode(self.protocol, h, bytes)?;
+                        let (h, mut bytes) =
+                            self.recv_specific_packet(tt::PacketType::PubRel).await?;
+                        let rel = tt::PubRel::decode(self.protocol, &h, &mut bytes)?;
                         if rel.pkid != pkt.pkid {
-                            return Err(Error::Generic(format!(
-                                "diff pkid {}, {}",
-                                rel.pkid, pkt.pkid
-                            )));
+                            bail!(format!("diff pkid {}, {}", rel.pkid, pkt.pkid));
                         }
                     }
 

@@ -1,5 +1,5 @@
 use super::*;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 
 /// Return code in connack
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -54,42 +54,42 @@ impl PubAck {
         len
     }
 
-    pub fn decode(
-        protocol: Protocol,
-        fixed_header: FixedHeader,
-        mut bytes: Bytes,
-    ) -> Result<Self, Error> {
-        let variable_header_index = fixed_header.fixed_header_len;
-        bytes.advance(variable_header_index);
-        let pkid = read_u16(&mut bytes)?;
+    // pub fn decode(
+    //     protocol: Protocol,
+    //     fixed_header: FixedHeader,
+    //     mut bytes: Bytes,
+    // ) -> Result<Self, Error> {
+    //     let variable_header_index = fixed_header.fixed_header_len;
+    //     bytes.advance(variable_header_index);
+    //     let pkid = read_u16(&mut bytes)?;
 
-        // No reason code or properties if remaining length == 2
-        if fixed_header.remaining_len == 2 || protocol == Protocol::V4 {
-            return Ok(PubAck {
-                pkid,
-                reason: PubAckReason::Success,
-                properties: None,
-            });
-        }
+    //     // No reason code or properties if remaining length == 2
+    //     if fixed_header.remaining_len == 2 || protocol == Protocol::V4 {
+    //         return Ok(PubAck {
+    //             pkid,
+    //             reason: PubAckReason::Success,
+    //             properties: None,
+    //         });
+    //     }
 
-        // No properties len or properties if remaining len > 2 but < 4
-        let ack_reason = read_u8(&mut bytes)?;
-        if fixed_header.remaining_len < 4 {
-            return Ok(PubAck {
-                pkid,
-                reason: reason(ack_reason)?,
-                properties: None,
-            });
-        }
+    //     // No properties len or properties if remaining len > 2 but < 4
+    //     let ack_reason = read_u8(&mut bytes)?;
+    //     if fixed_header.remaining_len < 4 {
+    //         return Ok(PubAck {
+    //             pkid,
+    //             reason: reason(ack_reason)?,
+    //             properties: None,
+    //         });
+    //     }
 
-        let puback = PubAck {
-            pkid,
-            reason: reason(ack_reason)?,
-            properties: PubAckProperties::extract(&mut bytes)?,
-        };
+    //     let puback = PubAck {
+    //         pkid,
+    //         reason: reason(ack_reason)?,
+    //         properties: PubAckProperties::extract(&mut bytes)?,
+    //     };
 
-        Ok(puback)
-    }
+    //     Ok(puback)
+    // }
 
     // pub fn read(fixed_header: FixedHeader, bytes: Bytes) -> Result<Self, Error> {
     //     Self::decode(Protocol::V5, fixed_header, bytes)
@@ -122,6 +122,45 @@ impl PubAck {
     // }
 }
 
+impl PacketDecoder for PubAck {
+    fn decode<B: Buf>(
+        protocol: Protocol,
+        fixed_header: &FixedHeader,
+        bytes: &mut B,
+    ) -> Result<Self> {
+        let variable_header_index = fixed_header.fixed_header_len;
+        bytes.advance(variable_header_index);
+        let pkid = read_u16(bytes)?;
+
+        // No reason code or properties if remaining length == 2
+        if fixed_header.remaining_len == 2 || protocol == Protocol::V4 {
+            return Ok(PubAck {
+                pkid,
+                reason: PubAckReason::Success,
+                properties: None,
+            });
+        }
+
+        // No properties len or properties if remaining len > 2 but < 4
+        let ack_reason = read_u8(bytes)?;
+        if fixed_header.remaining_len < 4 {
+            return Ok(PubAck {
+                pkid,
+                reason: reason(ack_reason)?,
+                properties: None,
+            });
+        }
+
+        let puback = PubAck {
+            pkid,
+            reason: reason(ack_reason)?,
+            properties: PubAckProperties::extract(bytes)?,
+        };
+
+        Ok(puback)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PubAckProperties {
     pub reason_string: Option<String>,
@@ -143,12 +182,13 @@ impl PubAckProperties {
         len
     }
 
-    pub fn extract(mut bytes: &mut Bytes) -> Result<Option<PubAckProperties>, Error> {
+    pub fn extract<B: Buf>(mut bytes: &mut B) -> Result<Option<PubAckProperties>, Error> {
         let mut reason_string = None;
         let mut user_properties = Vec::new();
 
-        let (properties_len_len, properties_len) = length(bytes.iter())?;
-        bytes.advance(properties_len_len);
+        // let (properties_len_len, properties_len) = length(bytes.iter())?;
+        // bytes.advance(properties_len_len);
+        let (_properties_len_len, properties_len) = parse_length(bytes)?;
         if properties_len == 0 {
             return Ok(None);
         }

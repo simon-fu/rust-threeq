@@ -11,12 +11,12 @@ TODO:
 - support local disk storage
 */
 
-use std::{collections::HashSet, sync::Arc, time::Duration};
-
+use anyhow::{bail, Result};
 use bytes::{Bytes, BytesMut};
 use clap::Clap;
-use rust_threeq::tq3::{self, tt};
+use rust_threeq::tq3::{self, tbytes::PacketDecoder, tt};
 use std::convert::TryFrom;
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
@@ -117,23 +117,24 @@ pub enum Error {
     Generic(String),
 }
 
-impl Error {
-    fn broken_pipe<E>(reason: E) -> Self
-    where
-        E: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
-        Error::from(std::io::Error::new(std::io::ErrorKind::BrokenPipe, reason))
-    }
+// impl Error {
+//     fn broken_pipe<E>(reason: E) -> Self
+//     where
+//         E: Into<Box<dyn std::error::Error + Send + Sync>>,
+//     {
+//         Error::from(std::io::Error::new(std::io::ErrorKind::BrokenPipe, reason))
+//     }
 
-    fn timeout<E>(reason: E) -> Self
-    where
-        E: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
-        Error::from(std::io::Error::new(std::io::ErrorKind::TimedOut, reason))
-    }
-}
+//     fn timeout<E>(reason: E) -> Self
+//     where
+//         E: Into<Box<dyn std::error::Error + Send + Sync>>,
+//     {
+//         Error::from(std::io::Error::new(std::io::ErrorKind::TimedOut, reason))
+//     }
+// }
 
-type ThizResult<T> = core::result::Result<T, Error>;
+// type ThizResult<T> = core::result::Result<T, Error>;
+type ThizResult<T> = Result<T>;
 
 struct Reader<'a> {
     rd: ReadHalf<'a>,
@@ -161,13 +162,13 @@ impl<'a> Reader<'a> {
                 }
                 Err(tt::Error::InsufficientBytes(_required)) => {}
                 Err(e) => {
-                    return Err(Error::from(e));
+                    return Err(anyhow::Error::from(e));
                 }
             }
 
             let n = self.rd.read_buf(&mut self.ibuf).await?;
             if n == 0 {
-                return Err(Error::broken_pipe("read disconnect"));
+                bail!("read disconnect".to_string());
             }
         }
     }
@@ -219,16 +220,13 @@ async fn service_connect(
     reader: &mut Reader<'_>,
     writer: &mut Writer<'_>,
 ) -> ThizResult<Box<Session>> {
-    let (ptype, header, bytes) = reader.read_packet(CONNECT_MAX_PACKET_SIZE).await?;
+    let (ptype, header, mut bytes) = reader.read_packet(CONNECT_MAX_PACKET_SIZE).await?;
 
     if ptype != tt::PacketType::Connect {
-        return Err(Error::Generic(format!(
-            "expect first connect but {:?}",
-            ptype
-        )));
+        bail!("expect first connect but {:?}", ptype);
     }
 
-    let mut conn_pkt = tt::Connect::read(header, bytes)?;
+    let mut conn_pkt = tt::Connect::decode(tt::Protocol::V5, &header, &mut bytes)?;
     let mut conn_ack = tt::ConnAck::new(tt::ConnectReturnCode::Success, false);
     conn_ack.properties = Some(tt::ConnAckProperties::new());
 
@@ -357,8 +355,7 @@ impl Session {
         if self.keep_alive_ms > elapsed {
             return Ok(self.keep_alive_ms - elapsed);
         } else {
-            let reason = format!("keep alive timeout {} millis", self.keep_alive_ms);
-            return Err(Error::timeout(reason));
+            bail!("keep alive timeout {} millis", self.keep_alive_ms);
         }
     }
 
@@ -383,7 +380,7 @@ impl Session {
                             self.xfer_loop(reader, writer).await?;
                         },
                         Err(e) => {
-                            return Err(Error::from(e));
+                            return Err(anyhow::Error::from(e));
                         },
                     }
                 }
@@ -422,7 +419,7 @@ impl Session {
     async fn handle_connect(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> ThizResult<()> {
         // self.conn_pkt = tt::Connect::read(fixed_header, bytes)?;
@@ -442,7 +439,7 @@ impl Session {
 
         // let _ = connack.encode(self.conn_pkt.protocol, obuf);
 
-        let _conn_pkt = tt::Connect::read(fixed_header, bytes)?;
+        let _conn_pkt = tt::Connect::decode(tt::Protocol::V5, &fixed_header, &mut bytes)?;
         let connack = tt::ConnAck::new(tt::ConnectReturnCode::UnspecifiedError, false);
         let _r = connack.encode(self.protocol, obuf)?;
         Ok(())
@@ -451,10 +448,10 @@ impl Session {
     async fn handle_publish(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        let packet = tt::Publish::decode(self.protocol, fixed_header, bytes)?;
+        let packet = tt::Publish::decode(self.protocol, &fixed_header, &mut bytes)?;
         match packet.qos {
             tt::QoS::AtMostOnce => {}
             tt::QoS::AtLeastOnce => {
@@ -500,10 +497,10 @@ impl Session {
     async fn handle_puback(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         _obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        let _pkt = tt::PubAck::decode(self.protocol, fixed_header, bytes)?;
+        let _pkt = tt::PubAck::decode(self.protocol, &fixed_header, &mut bytes)?;
         Ok(())
     }
 
@@ -525,10 +522,10 @@ impl Session {
     async fn handle_subscribe(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        let packet = tt::Subscribe::decode(self.protocol, fixed_header, bytes)?;
+        let packet = tt::Subscribe::decode(self.protocol, &fixed_header, &mut bytes)?;
 
         let mut return_codes: Vec<tt::SubscribeReasonCode> = Vec::new();
         for val in packet.filters.iter() {
@@ -553,10 +550,10 @@ impl Session {
     async fn handle_unsubscribe(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        let packet = tt::Unsubscribe::decode(self.protocol, fixed_header, bytes)?;
+        let packet = tt::Unsubscribe::decode(self.protocol, &fixed_header, &mut bytes)?;
 
         for filter in packet.filters.iter() {
             if self.topic_filters.remove(filter) {
@@ -586,17 +583,17 @@ impl Session {
     async fn handle_disconnect(
         &mut self,
         fixed_header: tt::FixedHeader,
-        bytes: Bytes,
+        mut bytes: Bytes,
         _obuf: &mut BytesMut,
     ) -> ThizResult<()> {
-        let _pkt = tt::Disconnect::decode(self.protocol, fixed_header, bytes)?;
+        let _pkt = tt::Disconnect::decode(self.protocol, &fixed_header, &mut bytes)?;
         debug!("disconnect by client");
         self.disconnected = true;
         Ok(())
     }
 
     async fn handle_unexpect(&mut self, packet_type: tt::PacketType) -> ThizResult<()> {
-        Err(Error::UnexpectPacket(packet_type))
+        bail!("unexpect packet {:?}", packet_type);
     }
 
     async fn handle_packet(
@@ -722,10 +719,7 @@ impl Session {
                 }
 
                 r = writer.wr.write_buf(&mut writer.obuf), if writer.obuf.len() > 0 => {
-                    match r{
-                        Ok(_) => { },
-                        Err(e) => { return Err(Error::from(e)); },
-                    }
+                    let _r = r?;
                 }
 
                 r = hub::recv_bc(&mut self.rx_bc) => {

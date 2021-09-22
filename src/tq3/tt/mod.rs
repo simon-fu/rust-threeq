@@ -1,4 +1,5 @@
 use super::tbytes;
+use anyhow::Result;
 use std::{num::Wrapping, slice::Iter};
 
 pub mod client;
@@ -19,6 +20,7 @@ pub type PacketType = tbytes::PacketType;
 
 pub type QoS = tbytes::QoS;
 
+use bytes::Buf;
 pub use tbytes::v5::*;
 
 // pub type Message = Publish;
@@ -131,4 +133,16 @@ impl PacketId {
     fn get(&self) -> u16 {
         self.0 .0
     }
+}
+
+pub trait Decoder: Sized {
+    fn decode<B: Buf + ExactSizeIterator>(buf: &mut B) -> Result<Self>;
+}
+
+// pub trait Decoder: Sized {
+//     fn decode<B: Buf>(protocol: Protocol, fixed_header: FixedHeader, buf: &mut B) -> Result<Self>;
+// }
+
+pub trait Encoder: Sized {
+    fn encode<B: Buf>(buf: &mut B) -> Result<Self>;
 }

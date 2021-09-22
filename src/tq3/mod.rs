@@ -16,6 +16,8 @@ pub mod hub;
 
 pub mod histogram;
 
+pub mod hex;
+
 lazy_static::lazy_static! {
     static ref BASE:std::time::Instant = std::time::Instant::now();
 
@@ -357,6 +359,14 @@ impl<T: Flight> Inflights<T> {
         let r = flight.recv_ack().await?;
         return Ok(Some(r));
     }
+}
+
+#[macro_export]
+macro_rules! here {
+    () => {
+        // src/bin/mongodb.rs:16:5
+        concat!("at ", file!(), ":", line!(), ":", column!())
+    };
 }
 
 #[cfg(test)]

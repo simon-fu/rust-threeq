@@ -98,7 +98,7 @@ mod test {
         ];
 
         stream.extend_from_slice(&packetstream[..]);
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
         let connack_bytes = stream.split_to(fixed_header.frame_length()).freeze();
         let connack = ConnAck::read(fixed_header, connack_bytes).unwrap();
 

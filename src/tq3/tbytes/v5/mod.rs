@@ -116,8 +116,8 @@ fn property(num: u8) -> Result<PropertyType, Error> {
 }
 
 /// Reads a stream of bytes and extracts next MQTT packet out of it
-pub fn read(stream: &mut BytesMut, max_size: usize) -> Result<Packet, Error> {
-    let fixed_header = check(stream.iter(), max_size)?;
+pub fn read(stream: &mut BytesMut, max_size: usize) -> Result<Packet> {
+    let fixed_header = check(&stream[..], max_size)?;
 
     // Test with a stream with exactly the size to check border panics
     let packet = stream.split_to(fixed_header.frame_length());
@@ -128,40 +128,54 @@ pub fn read(stream: &mut BytesMut, max_size: usize) -> Result<Packet, Error> {
         return match packet_type {
             PacketType::PingReq => Ok(Packet::PingReq),
             PacketType::PingResp => Ok(Packet::PingResp),
-            _ => Err(Error::PayloadRequired),
+            _ => Err(anyhow::Error::from(Error::PayloadRequired)),
         };
     }
 
-    let packet = packet.freeze();
+    let mut packet = packet.freeze();
     let packet = match packet_type {
-        PacketType::Connect => Packet::Connect(Connect::read(fixed_header, packet)?),
+        PacketType::Connect => {
+            Packet::Connect(Connect::decode(Protocol::V5, &fixed_header, &mut packet)?)
+        }
         PacketType::ConnAck => {
-            Packet::ConnAck(ConnAck::decode(Protocol::V5, fixed_header, packet)?)
+            Packet::ConnAck(ConnAck::decode(Protocol::V5, &fixed_header, &mut packet)?)
         }
         PacketType::Publish => {
-            Packet::Publish(Publish::decode(Protocol::V5, fixed_header, packet)?)
+            Packet::Publish(Publish::decode(Protocol::V5, &fixed_header, &mut packet)?)
         }
-        PacketType::PubAck => Packet::PubAck(PubAck::decode(Protocol::V5, fixed_header, packet)?),
-        PacketType::PubRec => Packet::PubRec(PubRec::decode(Protocol::V5, fixed_header, packet)?),
-        PacketType::PubRel => Packet::PubRel(PubRel::decode(Protocol::V5, fixed_header, packet)?),
+        PacketType::PubAck => {
+            Packet::PubAck(PubAck::decode(Protocol::V5, &fixed_header, &mut packet)?)
+        }
+        PacketType::PubRec => {
+            Packet::PubRec(PubRec::decode(Protocol::V5, &fixed_header, &mut packet)?)
+        }
+        PacketType::PubRel => {
+            Packet::PubRel(PubRel::decode(Protocol::V5, &fixed_header, &mut packet)?)
+        }
         PacketType::PubComp => {
-            Packet::PubComp(PubComp::decode(Protocol::V5, fixed_header, packet)?)
+            Packet::PubComp(PubComp::decode(Protocol::V5, &fixed_header, &mut packet)?)
         }
         PacketType::Subscribe => {
-            Packet::Subscribe(Subscribe::decode(Protocol::V5, fixed_header, packet)?)
+            Packet::Subscribe(Subscribe::decode(Protocol::V5, &fixed_header, &mut packet)?)
         }
-        PacketType::SubAck => Packet::SubAck(SubAck::decode(Protocol::V5, fixed_header, packet)?),
-        PacketType::Unsubscribe => {
-            Packet::Unsubscribe(Unsubscribe::decode(Protocol::V5, fixed_header, packet)?)
+        PacketType::SubAck => {
+            Packet::SubAck(SubAck::decode(Protocol::V5, &fixed_header, &mut packet)?)
         }
+        PacketType::Unsubscribe => Packet::Unsubscribe(Unsubscribe::decode(
+            Protocol::V5,
+            &fixed_header,
+            &mut packet,
+        )?),
         PacketType::UnsubAck => {
-            Packet::UnsubAck(UnsubAck::decode(Protocol::V5, fixed_header, packet)?)
+            Packet::UnsubAck(UnsubAck::decode(Protocol::V5, &fixed_header, &mut packet)?)
         }
         PacketType::PingReq => Packet::PingReq,
         PacketType::PingResp => Packet::PingResp,
-        PacketType::Disconnect => {
-            Packet::Disconnect(Disconnect::decode(Protocol::V5, fixed_header, packet)?)
-        }
+        PacketType::Disconnect => Packet::Disconnect(Disconnect::decode(
+            Protocol::V5,
+            &fixed_header,
+            &mut packet,
+        )?),
     };
 
     Ok(packet)

@@ -150,7 +150,7 @@ mod test {
         ];
 
         let mut stream = BytesMut::from(&stream[..]);
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
         let publish_bytes = stream.split_to(fixed_header.frame_length()).freeze();
         let packet = Publish::read(fixed_header, publish_bytes).unwrap();
 
@@ -187,7 +187,7 @@ mod test {
         ];
 
         let mut stream = BytesMut::from(&stream[..]);
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
         let publish_bytes = stream.split_to(fixed_header.frame_length()).freeze();
         let packet = Publish::read(fixed_header, publish_bytes).unwrap();
 

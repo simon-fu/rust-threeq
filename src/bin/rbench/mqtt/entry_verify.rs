@@ -18,11 +18,11 @@
 - offline message limit
 */
 
-use std::time::Duration;
-
 use super::config::*;
+use anyhow::{bail, Context, Result};
 use clap::Clap;
-use rust_threeq::tq3::tt;
+use rust_threeq::{here, tq3::tt};
+use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, Instrument, Span};
 
@@ -40,24 +40,23 @@ struct CmdArgs {
 pub enum Error {
     #[error("{0}")]
     ClientError(#[from] tt::client::Error),
-
-    #[error("error: {0}")]
-    Generic(String),
+    // #[error("error: {0}")]
+    // Generic(String),
 }
 
-fn check_publish(rpkt: &tt::Publish, pkt: &tt::Publish, retain: bool) -> Result<(), String> {
+fn check_publish(rpkt: &tt::Publish, pkt: &tt::Publish, retain: bool) -> Result<()> {
     if pkt.qos != rpkt.qos {
-        Err("diff qos".to_string())
+        bail!("diff qos".to_string())
     } else if pkt.topic != rpkt.topic {
-        Err("diff topic".to_string())
+        bail!("diff topic".to_string())
     } else if pkt.payload != rpkt.payload {
-        Err("diff payload".to_string())
+        bail!("diff payload".to_string())
     } else if pkt.retain != retain {
-        Err("diff retain".to_string())
+        bail!("diff retain".to_string())
     } else if pkt.dup != rpkt.dup {
-        Err("diff dup".to_string())
+        bail!("diff dup".to_string())
     } else if pkt.properties != rpkt.properties {
-        Err("diff properties".to_string())
+        bail!("diff properties".to_string())
     } else {
         Ok(())
     }
@@ -124,18 +123,18 @@ impl<'a> Connector<'a> {
         self
     }
 
-    async fn connect(&mut self, name: &str) -> Result<(), Error> {
+    async fn connect(&mut self, name: &str) -> Result<()> {
         // let name = format!("{:p}", &self);
         let mut client = tt::client::make_connection(name, &self.args.addr).await?;
         let ack = client.sender.connect(self.pkt.clone()).await?;
         if ack.code != tt::ConnectReturnCode::Success {
-            return Err(Error::Generic(format!("{:?}", ack)));
+            bail!("{:?}", ack);
         }
         self.client = Some(client);
         return Ok(());
     }
 
-    async fn subscribe(&mut self) -> Result<(), Error> {
+    async fn subscribe(&mut self) -> Result<()> {
         let client = self.client.as_mut().unwrap();
         let ack = client
             .sender
@@ -143,7 +142,7 @@ impl<'a> Connector<'a> {
             .await?;
         for reason in &ack.return_codes {
             if !reason.is_success() {
-                return Err(Error::Generic(format!("{:?}", ack)));
+                bail!("{:?}", ack);
             }
         }
         return Ok(());
@@ -163,7 +162,7 @@ impl<'a> Connector<'a> {
     //     return Ok(());
     // }
 
-    async fn unsubscribe(&mut self) -> Result<(), Error> {
+    async fn unsubscribe(&mut self) -> Result<()> {
         let client = self.client.as_mut().unwrap();
         let ack = client
             .sender
@@ -171,15 +170,13 @@ impl<'a> Connector<'a> {
             .await?;
         for reason in &ack.reasons {
             if *reason != tt::UnsubAckReason::Success {
-                let str = format!("unsubscribe fail, {:?}", ack);
-                error!("{}", str);
-                return Err(Error::Generic(str));
+                bail!("unsubscribe fail, {:?}", ack);
             }
         }
         return Ok(());
     }
 
-    async fn publish(&mut self) -> Result<(), Error> {
+    async fn publish(&mut self) -> Result<()> {
         let client = self.client.as_mut().unwrap();
         let _r = client
             .sender
@@ -192,13 +189,13 @@ impl<'a> Connector<'a> {
         Ok(())
     }
 
-    async fn publish1(&mut self, pkt: tt::Publish) -> Result<(), Error> {
+    async fn publish1(&mut self, pkt: tt::Publish) -> Result<()> {
         let client = self.client.as_mut().unwrap();
         let _r = client.sender.publish(pkt).await?;
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<tt::client::Event, tt::client::Error> {
+    async fn recv(&mut self) -> Result<tt::client::Event> {
         let client = self.client.as_mut().unwrap();
         let r = timeout(self.args.timeout, client.receiver.recv()).await;
         let ev = match r {
@@ -211,18 +208,15 @@ impl<'a> Connector<'a> {
         return ev;
     }
 
-    async fn recv_timeout(&mut self) -> Result<(), Error> {
+    async fn recv_timeout(&mut self) -> Result<()> {
         let client = self.client.as_mut().unwrap();
         return match timeout(self.args.timeout, client.receiver.recv()).await {
-            Ok(r) => Err(Error::Generic(format!(
-                "expect recv timeout, but got {:?}",
-                r
-            ))),
+            Ok(r) => bail!("expect recv timeout, but got {:?}", r),
             Err(_) => Ok(()),
         };
     }
 
-    async fn recv_publish0(&mut self) -> Result<(), Error> {
+    async fn recv_publish0(&mut self) -> Result<()> {
         let rpkt = tt::Publish::new(
             self.args.topic.clone(),
             self.args.qos,
@@ -231,11 +225,11 @@ impl<'a> Connector<'a> {
         return self.recv_publish1(&rpkt).await;
     }
 
-    async fn recv_publish1(&mut self, rpkt: &tt::Publish) -> Result<(), Error> {
+    async fn recv_publish1(&mut self, rpkt: &tt::Publish) -> Result<()> {
         return self.recv_publish2(&rpkt, rpkt.retain).await;
     }
 
-    async fn recv_publish2(&mut self, rpkt: &tt::Publish, retain: bool) -> Result<(), Error> {
+    async fn recv_publish2(&mut self, rpkt: &tt::Publish, retain: bool) -> Result<()> {
         let ev = self.recv().await?;
 
         match &ev {
@@ -245,10 +239,7 @@ impl<'a> Connector<'a> {
                     return match r {
                         Ok(_) => Ok(()),
                         Err(s) => {
-                            let str =
-                                format!("expect recv {:?}, but {:?}, reason {}", rpkt, pkt, s);
-                            error!("{}", str);
-                            Err(Error::Generic(str))
+                            bail!("expect recv {:?}, but {:?}, reason {}", rpkt, pkt, s);
                         }
                     };
                 }
@@ -256,16 +247,16 @@ impl<'a> Connector<'a> {
             },
             tt::client::Event::Closed(_) => {}
         }
-        return Err(Error::Generic(format!("expect publish but got {:?}", ev)));
+        bail!("expect publish but got {:?}", ev);
     }
 
-    async fn disconnect(&mut self) -> Result<(), Error> {
+    async fn disconnect(&mut self) -> Result<()> {
         let client = self.client.as_mut().unwrap();
         let _r = client.sender.disconnect(tt::Disconnect::new()).await?;
         Ok(())
     }
 
-    async fn shutdown(&mut self) -> Result<(), Error> {
+    async fn shutdown(&mut self) -> Result<()> {
         let client = self.client.as_mut().unwrap();
         let _r = client.sender.shutdown().await?;
         Ok(())
@@ -328,11 +319,11 @@ impl<'a> SyncConnector<'a> {
     //     self
     // }
 
-    async fn connect(&mut self, name: &str) -> Result<(), Error> {
+    async fn connect(&mut self, name: &str) -> Result<()> {
         let mut client = tt::client::SyncClient::new(name.to_string());
         let ack = client.connect(&self.args.addr, &self.pkt).await?;
         if ack.code != tt::ConnectReturnCode::Success {
-            return Err(Error::Generic(format!("{:?}", ack)));
+            bail!("{:?}", ack);
         }
         self.client = Some(client);
         return Ok(());
@@ -352,12 +343,12 @@ impl<'a> SyncConnector<'a> {
     //     return Ok(());
     // }
 
-    async fn subscribe1(&mut self, filter: &str, qos: tt::QoS) -> Result<(), Error> {
+    async fn subscribe1(&mut self, filter: &str, qos: tt::QoS) -> Result<()> {
         let client = self.client.as_mut().unwrap();
         let ack = client.subscribe(&tt::Subscribe::new(filter, qos)).await?;
         for reason in &ack.return_codes {
             if !reason.is_success() {
-                return Err(Error::Generic(format!("{:?}", ack)));
+                bail!("{:?}", ack);
             }
         }
         return Ok(());
@@ -389,7 +380,7 @@ impl<'a> SyncConnector<'a> {
     //     Ok(())
     // }
 
-    async fn publish_str(&mut self, s: &str) -> Result<(), Error> {
+    async fn publish_str(&mut self, s: &str) -> Result<()> {
         let client = self.client.as_mut().unwrap();
         let _r = client
             .publish(&tt::Publish::new(&self.args.topic, self.args.qos, s))
@@ -397,7 +388,7 @@ impl<'a> SyncConnector<'a> {
         Ok(())
     }
 
-    async fn recv_publish(&mut self) -> Result<tt::Publish, Error> {
+    async fn recv_publish(&mut self) -> Result<tt::Publish> {
         let client = self.client.as_mut().unwrap();
         let pkt = client.recv_publish().await?;
         Ok(pkt)
@@ -505,7 +496,7 @@ struct VArgs {
 }
 
 #[instrument(skip(args, accounts), level = "debug")]
-async fn clean_up(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+async fn clean_up(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()> {
     debug!("");
 
     let account = accounts.next().unwrap();
@@ -525,39 +516,40 @@ async fn clean_up(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Err
 }
 
 #[instrument(skip(args, accounts), name = "basic", level = "debug")]
-async fn verify_basic(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+async fn verify_basic(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()> {
     debug!("");
 
     let account = accounts.next().unwrap();
 
     let mut client = Connector::new(args, &account);
 
-    client.connect("client").await?;
+    client.connect("client").await.context(here!())?;
 
-    client.subscribe().await?;
+    client.subscribe().await.context(here!())?;
 
-    client.publish().await?;
+    client.publish().await.context(here!())?;
 
-    client.recv_publish0().await?;
+    client.recv_publish0().await.context(here!())?;
 
-    client.unsubscribe().await?;
+    client.unsubscribe().await.context(here!())?;
 
-    client.publish().await?;
+    client.publish().await.context(here!())?;
 
     client
         .recv_timeout()
         .instrument(new_span("recv no message after unsubscribe"))
-        .await?;
+        .await
+        .context(here!())?;
 
-    client.disconnect().await?;
+    client.disconnect().await.context(here!())?;
 
-    client.recv().await?;
+    client.recv().await.context(here!())?;
 
     Ok(())
 }
 
 #[instrument(skip(args, accounts), name = "same_client_id", level = "debug")]
-async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()> {
     debug!("");
 
     let account = accounts.next().unwrap();
@@ -580,12 +572,23 @@ async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> R
     match args.protocol {
         tt::Protocol::V4 => {
             if r.is_err() {
-                if let tt::client::Error::Broken(_) = r.as_ref().unwrap_err() {
-                    debug!("got exactlly broken");
-                    return Ok(());
+                let e = r.as_ref().unwrap_err();
+                match e.downcast_ref::<tt::client::Error>() {
+                    Some(e) => {
+                        if let tt::client::Error::Broken(_) = e {
+                            debug!("got exactlly broken");
+                            return Ok(());
+                        }
+                    }
+                    None => {}
                 }
+
+                // if let tt::client::Error::Broken(_) = r.as_ref().unwrap_err().downcast_ref() {
+                //     debug!("got exactlly broken");
+                //     return Ok(());
+                // }
             }
-            return Err(Error::Generic(format!("expect broken but got {:?}", r)));
+            bail!("expect broken but got {:?}", r);
         }
         tt::Protocol::V5 => {
             if let Ok(ev) = &r {
@@ -595,21 +598,21 @@ async fn verify_same_client_id(args: &VArgs, mut accounts: AccountIter<'_>) -> R
                             debug!("got exactlly disconnect SessionTakenOver");
                             return Ok(());
                         } else {
-                            return Err(Error::Generic(format!(
+                            bail!(
                                 "expect disconnect SessionTakenOver but {:?}",
                                 disonn.reason_code
-                            )));
+                            );
                         }
                     }
                 }
             }
-            return Err(Error::Generic(format!("expect disconnect but got {:?}", r)));
+            bail!("expect disconnect but got {:?}", r);
         }
     }
 }
 
 #[instrument(skip(args, accounts), name = "clean_session", level = "debug")]
-async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()> {
     /*
     - clean session basic
     - user 1
@@ -705,7 +708,7 @@ async fn verify_clean_session(args: &VArgs, mut accounts: AccountIter<'_>) -> Re
 }
 
 #[instrument(skip(args, accounts), name = "retain", level = "debug")]
-async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()> {
     /*
         - retain message
             - user 1: connect and publish m1 with retain, m2 without retain, disconnect
@@ -881,7 +884,7 @@ async fn verify_retain(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
 }
 
 #[instrument(skip(args, accounts), name = "will", level = "debug")]
-async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()> {
     // - will message
     // - user 1: connect and subscribe
     // - user 2: connect with will m1 and shutdown socket
@@ -915,11 +918,7 @@ async fn verify_will(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), 
     Ok(())
 }
 
-async fn client_recv(
-    client: &mut SyncConnector<'_>,
-    n: &mut usize,
-    max_num: usize,
-) -> Result<(), Error> {
+async fn client_recv(client: &mut SyncConnector<'_>, n: &mut usize, max_num: usize) -> Result<()> {
     while *n < max_num {
         let pkt = client.recv_publish().await?;
         let s = std::str::from_utf8(&pkt.payload).unwrap();
@@ -930,7 +929,7 @@ async fn client_recv(
 }
 
 #[instrument(skip(args, accounts), name = "shared", level = "debug")]
-async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<(), Error> {
+async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()> {
     // - will message
     // - user 1: connect and subscribe
     // - user 2: connect with will m1 and shutdown socket
@@ -963,7 +962,7 @@ async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
             debug!("client3: published message {}", n);
         }
         client3.disconnect().await?;
-        Ok::<(), Error>(())
+        Ok::<(), anyhow::Error>(())
     };
 
     let h = tokio::spawn(async move {
@@ -1001,7 +1000,7 @@ async fn verify_shared(args: &VArgs, mut accounts: AccountIter<'_>) -> Result<()
 }
 
 #[instrument(skip(cfg), level = "debug")]
-async fn verfiy(cfg: &Config, ver: tt::Protocol) -> Result<(), Error> {
+async fn verfiy(cfg: &Config, ver: tt::Protocol) -> Result<()> {
     let verification = cfg.verification();
     let args = VArgs {
         addr: cfg.env().address.clone(),
@@ -1045,7 +1044,7 @@ async fn verfiy(cfg: &Config, ver: tt::Protocol) -> Result<(), Error> {
     Ok(())
 }
 
-async fn run0(cfg: Config) -> Result<(), Error> {
+async fn run0(cfg: Config) -> Result<()> {
     if cfg.verification().verify_v4 {
         verfiy(&cfg, tt::Protocol::V4).await?;
     }

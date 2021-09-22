@@ -72,44 +72,44 @@ impl Publish {
     //     return Self::decode(Protocol::V5, fixed_header, bytes);
     // }
 
-    pub fn decode(
-        protocol: Protocol,
-        fixed_header: FixedHeader,
-        mut bytes: Bytes,
-    ) -> Result<Self, Error> {
-        let qos = qos((fixed_header.byte1 & 0b0110) >> 1)?;
-        let dup = (fixed_header.byte1 & 0b1000) != 0;
-        let retain = (fixed_header.byte1 & 0b0001) != 0;
+    // pub fn decode(
+    //     protocol: Protocol,
+    //     fixed_header: FixedHeader,
+    //     mut bytes: Bytes,
+    // ) -> Result<Self, Error> {
+    //     let qos = qos((fixed_header.byte1 & 0b0110) >> 1)?;
+    //     let dup = (fixed_header.byte1 & 0b1000) != 0;
+    //     let retain = (fixed_header.byte1 & 0b0001) != 0;
 
-        let variable_header_index = fixed_header.fixed_header_len;
-        bytes.advance(variable_header_index);
-        let topic = read_mqtt_string(&mut bytes)?;
+    //     let variable_header_index = fixed_header.fixed_header_len;
+    //     bytes.advance(variable_header_index);
+    //     let topic = read_mqtt_string(&mut bytes)?;
 
-        // Packet identifier exists where QoS > 0
-        let pkid = match qos {
-            QoS::AtMostOnce => 0,
-            QoS::AtLeastOnce | QoS::ExactlyOnce => read_u16(&mut bytes)?,
-        };
+    //     // Packet identifier exists where QoS > 0
+    //     let pkid = match qos {
+    //         QoS::AtMostOnce => 0,
+    //         QoS::AtLeastOnce | QoS::ExactlyOnce => read_u16(&mut bytes)?,
+    //     };
 
-        if qos != QoS::AtMostOnce && pkid == 0 {
-            return Err(Error::PacketIdZero);
-        }
+    //     if qos != QoS::AtMostOnce && pkid == 0 {
+    //         return Err(Error::PacketIdZero);
+    //     }
 
-        let publish = Publish {
-            dup,
-            retain,
-            qos,
-            pkid,
-            topic,
-            properties: match protocol {
-                Protocol::V4 => None,
-                Protocol::V5 => PublishProperties::extract(&mut bytes)?,
-            },
-            payload: bytes,
-        };
+    //     let publish = Publish {
+    //         dup,
+    //         retain,
+    //         qos,
+    //         pkid,
+    //         topic,
+    //         properties: match protocol {
+    //             Protocol::V4 => None,
+    //             Protocol::V5 => PublishProperties::extract(&mut bytes)?,
+    //         },
+    //         payload: bytes,
+    //     };
 
-        Ok(publish)
-    }
+    //     Ok(publish)
+    // }
 
     pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         self.encode_with(protocol, self.pkid, self.qos, buffer)
@@ -163,6 +163,47 @@ impl Publish {
     // }
 }
 
+impl PacketDecoder for Publish {
+    fn decode<B: Buf>(
+        protocol: Protocol,
+        fixed_header: &FixedHeader,
+        bytes: &mut B,
+    ) -> Result<Self> {
+        let qos = qos((fixed_header.byte1 & 0b0110) >> 1)?;
+        let dup = (fixed_header.byte1 & 0b1000) != 0;
+        let retain = (fixed_header.byte1 & 0b0001) != 0;
+
+        let variable_header_index = fixed_header.fixed_header_len;
+        bytes.advance(variable_header_index);
+        let topic = read_mqtt_string(bytes)?;
+
+        // Packet identifier exists where QoS > 0
+        let pkid = match qos {
+            QoS::AtMostOnce => 0,
+            QoS::AtLeastOnce | QoS::ExactlyOnce => read_u16(bytes)?,
+        };
+
+        if qos != QoS::AtMostOnce && pkid == 0 {
+            return Err(anyhow::Error::from(Error::PacketIdZero));
+        }
+
+        let publish = Publish {
+            dup,
+            retain,
+            qos,
+            pkid,
+            topic,
+            properties: match protocol {
+                Protocol::V4 => None,
+                Protocol::V5 => PublishProperties::extract(bytes)?,
+            },
+            payload: bytes.copy_to_bytes(bytes.remaining()),
+        };
+
+        Ok(publish)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PublishProperties {
     pub payload_format_indicator: Option<u8>,
@@ -214,7 +255,7 @@ impl PublishProperties {
         len
     }
 
-    fn extract(mut bytes: &mut Bytes) -> Result<Option<PublishProperties>, Error> {
+    fn extract<B: Buf>(mut bytes: &mut B) -> Result<Option<PublishProperties>, Error> {
         let mut payload_format_indicator = None;
         let mut message_expiry_interval = None;
         let mut topic_alias = None;
@@ -224,8 +265,9 @@ impl PublishProperties {
         let mut subscription_identifiers = Vec::new();
         let mut content_type = None;
 
-        let (properties_len_len, properties_len) = length(bytes.iter())?;
-        bytes.advance(properties_len_len);
+        // let (properties_len_len, properties_len) = length(bytes.iter())?;
+        // bytes.advance(properties_len_len);
+        let (_properties_len_len, properties_len) = parse_length(bytes)?;
         if properties_len == 0 {
             return Ok(None);
         }
@@ -266,9 +308,11 @@ impl PublishProperties {
                     user_properties.push((key, value));
                 }
                 PropertyType::SubscriptionIdentifier => {
-                    let (id_len, id) = length(bytes.iter())?;
+                    // let (id_len, id) = length(bytes.iter())?;
+                    // bytes.advance(id_len);
+                    let (id_len, id) = parse_length(bytes)?;
+
                     cursor += 1 + id_len;
-                    bytes.advance(id_len);
                     subscription_identifiers.push(id);
                 }
                 PropertyType::ContentType => {
@@ -414,10 +458,10 @@ mod test {
         let packetstream = &sample_bytes();
         stream.extend_from_slice(&packetstream[..]);
 
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
-        let publish_bytes = stream.split_to(fixed_header.frame_length()).freeze();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
+        let mut publish_bytes = stream.split_to(fixed_header.frame_length()).freeze();
         // let publish = Publish::read(fixed_header, publish_bytes).unwrap();
-        let publish = Publish::decode(Protocol::V5, fixed_header, publish_bytes).unwrap();
+        let publish = Publish::decode(Protocol::V5, &fixed_header, &mut publish_bytes).unwrap();
         assert_eq!(publish, sample_v5());
     }
 

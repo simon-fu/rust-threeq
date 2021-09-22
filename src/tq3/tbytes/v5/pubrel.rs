@@ -1,5 +1,5 @@
 use super::*;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 
 /// Return code in connack
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -45,39 +45,39 @@ impl PubRel {
         len
     }
 
-    pub fn decode(
-        protocol: Protocol,
-        fixed_header: FixedHeader,
-        mut bytes: Bytes,
-    ) -> Result<Self, Error> {
-        let variable_header_index = fixed_header.fixed_header_len;
-        bytes.advance(variable_header_index);
-        let pkid = read_u16(&mut bytes)?;
-        if fixed_header.remaining_len == 2 || protocol == Protocol::V4 {
-            return Ok(PubRel {
-                pkid,
-                reason: PubRelReason::Success,
-                properties: None,
-            });
-        }
+    // pub fn decode(
+    //     protocol: Protocol,
+    //     fixed_header: FixedHeader,
+    //     mut bytes: Bytes,
+    // ) -> Result<Self, Error> {
+    //     let variable_header_index = fixed_header.fixed_header_len;
+    //     bytes.advance(variable_header_index);
+    //     let pkid = read_u16(&mut bytes)?;
+    //     if fixed_header.remaining_len == 2 || protocol == Protocol::V4 {
+    //         return Ok(PubRel {
+    //             pkid,
+    //             reason: PubRelReason::Success,
+    //             properties: None,
+    //         });
+    //     }
 
-        let ack_reason = read_u8(&mut bytes)?;
-        if fixed_header.remaining_len < 4 {
-            return Ok(PubRel {
-                pkid,
-                reason: reason(ack_reason)?,
-                properties: None,
-            });
-        }
+    //     let ack_reason = read_u8(&mut bytes)?;
+    //     if fixed_header.remaining_len < 4 {
+    //         return Ok(PubRel {
+    //             pkid,
+    //             reason: reason(ack_reason)?,
+    //             properties: None,
+    //         });
+    //     }
 
-        let puback = PubRel {
-            pkid,
-            reason: reason(ack_reason)?,
-            properties: PubRelProperties::extract(&mut bytes)?,
-        };
+    //     let puback = PubRel {
+    //         pkid,
+    //         reason: reason(ack_reason)?,
+    //         properties: PubRelProperties::extract(&mut bytes)?,
+    //     };
 
-        Ok(puback)
-    }
+    //     Ok(puback)
+    // }
 
     pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         let len = self.len(protocol);
@@ -102,6 +102,42 @@ impl PubRel {
     }
 }
 
+impl PacketDecoder for PubRel {
+    fn decode<B: Buf>(
+        protocol: Protocol,
+        fixed_header: &FixedHeader,
+        bytes: &mut B,
+    ) -> Result<Self> {
+        let variable_header_index = fixed_header.fixed_header_len;
+        bytes.advance(variable_header_index);
+        let pkid = read_u16(bytes)?;
+        if fixed_header.remaining_len == 2 || protocol == Protocol::V4 {
+            return Ok(PubRel {
+                pkid,
+                reason: PubRelReason::Success,
+                properties: None,
+            });
+        }
+
+        let ack_reason = read_u8(bytes)?;
+        if fixed_header.remaining_len < 4 {
+            return Ok(PubRel {
+                pkid,
+                reason: reason(ack_reason)?,
+                properties: None,
+            });
+        }
+
+        let puback = PubRel {
+            pkid,
+            reason: reason(ack_reason)?,
+            properties: PubRelProperties::extract(bytes)?,
+        };
+
+        Ok(puback)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PubRelProperties {
     pub reason_string: Option<String>,
@@ -123,12 +159,13 @@ impl PubRelProperties {
         len
     }
 
-    pub fn extract(mut bytes: &mut Bytes) -> Result<Option<PubRelProperties>, Error> {
+    pub fn extract<B: Buf>(mut bytes: &mut B) -> Result<Option<PubRelProperties>, Error> {
         let mut reason_string = None;
         let mut user_properties = Vec::new();
 
-        let (properties_len_len, properties_len) = length(bytes.iter())?;
-        bytes.advance(properties_len_len);
+        // let (properties_len_len, properties_len) = length(bytes.iter())?;
+        // bytes.advance(properties_len_len);
+        let (_properties_len_len, properties_len) = parse_length(bytes)?;
         if properties_len == 0 {
             return Ok(None);
         }
@@ -229,9 +266,9 @@ mod test {
         let packetstream = &sample_bytes();
         stream.extend_from_slice(&packetstream[..]);
 
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
-        let pubrel_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let pubrel = PubRel::decode(Protocol::V5, fixed_header, pubrel_bytes).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
+        let mut pubrel_bytes = stream.split_to(fixed_header.frame_length()).freeze();
+        let pubrel = PubRel::decode(Protocol::V5, &fixed_header, &mut pubrel_bytes).unwrap();
         assert_eq!(pubrel, sample());
     }
 

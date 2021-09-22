@@ -167,11 +167,11 @@ impl DisconnectProperties {
         length
     }
 
-    pub fn extract(mut bytes: &mut Bytes) -> Result<Option<Self>, Error> {
-        let (properties_len_len, properties_len) = length(bytes.iter())?;
+    pub fn extract<B: Buf>(mut bytes: &mut B) -> Result<Option<Self>, Error> {
+        // let (properties_len_len, properties_len) = length(bytes.iter())?;
+        // bytes.advance(properties_len_len);
 
-        bytes.advance(properties_len_len);
-
+        let (_properties_len_len, properties_len) = parse_length(bytes)?;
         if properties_len == 0 {
             return Ok(None);
         }
@@ -287,49 +287,49 @@ impl Disconnect {
         length
     }
 
-    pub fn decode(
-        protocol: Protocol,
-        fixed_header: FixedHeader,
-        mut bytes: Bytes,
-    ) -> Result<Self, Error> {
-        let packet_type = fixed_header.byte1 >> 4;
+    // pub fn decode(
+    //     protocol: Protocol,
+    //     fixed_header: FixedHeader,
+    //     mut bytes: Bytes,
+    // ) -> Result<Self, Error> {
+    //     let packet_type = fixed_header.byte1 >> 4;
 
-        if packet_type != PacketType::Disconnect as u8 {
-            return Err(Error::InvalidPacketType(packet_type));
-        };
+    //     if packet_type != PacketType::Disconnect as u8 {
+    //         return Err(Error::InvalidPacketType(packet_type));
+    //     };
 
-        if protocol == Protocol::V4 {
-            if fixed_header.fixed_header_len != 2 {
-                return Err(Error::MalformedPacket);
-            } else {
-                return Ok(Self {
-                    reason_code: DisconnectReasonCode::NormalDisconnection,
-                    properties: None,
-                });
-            }
-        }
+    //     if protocol == Protocol::V4 {
+    //         if fixed_header.fixed_header_len != 2 {
+    //             return Err(Error::MalformedPacket);
+    //         } else {
+    //             return Ok(Self {
+    //                 reason_code: DisconnectReasonCode::NormalDisconnection,
+    //                 properties: None,
+    //             });
+    //         }
+    //     }
 
-        let flags = fixed_header.byte1 & 0b0000_1111;
+    //     let flags = fixed_header.byte1 & 0b0000_1111;
 
-        bytes.advance(fixed_header.fixed_header_len);
+    //     bytes.advance(fixed_header.fixed_header_len);
 
-        if flags != 0x00 {
-            return Err(Error::MalformedPacket);
-        };
+    //     if flags != 0x00 {
+    //         return Err(Error::MalformedPacket);
+    //     };
 
-        if fixed_header.remaining_len == 0 {
-            return Ok(Self::new());
-        }
+    //     if fixed_header.remaining_len == 0 {
+    //         return Ok(Self::new());
+    //     }
 
-        let reason_code = read_u8(&mut bytes)?;
+    //     let reason_code = read_u8(&mut bytes)?;
 
-        let disconnect = Self {
-            reason_code: reason_code.try_into()?,
-            properties: DisconnectProperties::extract(&mut bytes)?,
-        };
+    //     let disconnect = Self {
+    //         reason_code: reason_code.try_into()?,
+    //         properties: DisconnectProperties::extract(&mut bytes)?,
+    //     };
 
-        Ok(disconnect)
-    }
+    //     Ok(disconnect)
+    // }
 
     pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         buffer.put_u8(0xE0);
@@ -354,9 +354,57 @@ impl Disconnect {
     }
 }
 
+impl PacketDecoder for Disconnect {
+    fn decode<B: Buf>(
+        protocol: Protocol,
+        fixed_header: &FixedHeader,
+        bytes: &mut B,
+    ) -> Result<Self> {
+        let packet_type = fixed_header.byte1 >> 4;
+
+        if packet_type != PacketType::Disconnect as u8 {
+            return Err(anyhow::Error::from(Error::InvalidPacketType(packet_type)));
+        };
+
+        if protocol == Protocol::V4 {
+            if fixed_header.fixed_header_len != 2 {
+                return Err(anyhow::Error::from(Error::MalformedPacket));
+            } else {
+                return Ok(Self {
+                    reason_code: DisconnectReasonCode::NormalDisconnection,
+                    properties: None,
+                });
+            }
+        }
+
+        let flags = fixed_header.byte1 & 0b0000_1111;
+
+        bytes.advance(fixed_header.fixed_header_len);
+
+        if flags != 0x00 {
+            return Err(anyhow::Error::from(Error::MalformedPacket));
+        };
+
+        if fixed_header.remaining_len == 0 {
+            return Ok(Self::new());
+        }
+
+        let reason_code = read_u8(bytes)?;
+
+        let disconnect = Self {
+            reason_code: reason_code.try_into()?,
+            properties: DisconnectProperties::extract(bytes)?,
+        };
+
+        Ok(disconnect)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use bytes::BytesMut;
+
+    use crate::tq3::tbytes::PacketDecoder;
 
     // use crate::parse_fixed_header;
     use super::parse_fixed_header;
@@ -374,9 +422,10 @@ mod test {
 
         buffer.extend_from_slice(&packet_bytes[..]);
 
-        let fixed_header = parse_fixed_header(buffer.iter()).unwrap();
-        let disconnect_bytes = buffer.split_to(fixed_header.frame_length()).freeze();
-        let disconnect = Disconnect::decode(Protocol::V5, fixed_header, disconnect_bytes).unwrap();
+        let fixed_header = parse_fixed_header(&buffer[..]).unwrap();
+        let mut disconnect_bytes = buffer.split_to(fixed_header.frame_length()).freeze();
+        let disconnect =
+            Disconnect::decode(Protocol::V5, &fixed_header, &mut disconnect_bytes).unwrap();
 
         assert_eq!(disconnect, expected);
     }
@@ -432,9 +481,10 @@ mod test {
 
         buffer.extend_from_slice(&packet_bytes[..]);
 
-        let fixed_header = parse_fixed_header(buffer.iter()).unwrap();
-        let disconnect_bytes = buffer.split_to(fixed_header.frame_length()).freeze();
-        let disconnect = Disconnect::decode(Protocol::V5, fixed_header, disconnect_bytes).unwrap();
+        let fixed_header = parse_fixed_header(&buffer[..]).unwrap();
+        let mut disconnect_bytes = buffer.split_to(fixed_header.frame_length()).freeze();
+        let disconnect =
+            Disconnect::decode(Protocol::V5, &fixed_header, &mut disconnect_bytes).unwrap();
 
         assert_eq!(disconnect, expected);
     }

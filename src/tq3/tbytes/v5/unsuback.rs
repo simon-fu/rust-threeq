@@ -1,5 +1,5 @@
 use super::*;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 
 //// Return code in connack
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -54,55 +54,55 @@ impl UnsubAck {
         }
     }
 
-    pub fn decode(
-        protocal: Protocol,
-        fixed_header: FixedHeader,
-        mut bytes: Bytes,
-    ) -> Result<Self, Error> {
-        match protocal {
-            Protocol::V4 => {
-                if fixed_header.remaining_len != 2 {
-                    return Err(Error::PayloadSizeIncorrect);
-                }
+    // pub fn decode(
+    //     protocal: Protocol,
+    //     fixed_header: FixedHeader,
+    //     mut bytes: Bytes,
+    // ) -> Result<Self, Error> {
+    //     match protocal {
+    //         Protocol::V4 => {
+    //             if fixed_header.remaining_len != 2 {
+    //                 return Err(Error::PayloadSizeIncorrect);
+    //             }
 
-                let variable_header_index = fixed_header.fixed_header_len;
-                bytes.advance(variable_header_index);
-                let pkid = read_u16(&mut bytes)?;
-                let unsuback = UnsubAck {
-                    pkid,
-                    reasons: vec![],
-                    properties: None,
-                };
+    //             let variable_header_index = fixed_header.fixed_header_len;
+    //             bytes.advance(variable_header_index);
+    //             let pkid = read_u16(&mut bytes)?;
+    //             let unsuback = UnsubAck {
+    //                 pkid,
+    //                 reasons: vec![],
+    //                 properties: None,
+    //             };
 
-                Ok(unsuback)
-            }
-            Protocol::V5 => {
-                let variable_header_index = fixed_header.fixed_header_len;
-                bytes.advance(variable_header_index);
+    //             Ok(unsuback)
+    //         }
+    //         Protocol::V5 => {
+    //             let variable_header_index = fixed_header.fixed_header_len;
+    //             bytes.advance(variable_header_index);
 
-                let pkid = read_u16(&mut bytes)?;
-                let properties = UnsubAckProperties::extract(&mut bytes)?;
+    //             let pkid = read_u16(&mut bytes)?;
+    //             let properties = UnsubAckProperties::extract(&mut bytes)?;
 
-                if !bytes.has_remaining() {
-                    return Err(Error::MalformedPacket);
-                }
+    //             if !bytes.has_remaining() {
+    //                 return Err(Error::MalformedPacket);
+    //             }
 
-                let mut reasons = Vec::new();
-                while bytes.has_remaining() {
-                    let r = read_u8(&mut bytes)?;
-                    reasons.push(reason(r)?);
-                }
+    //             let mut reasons = Vec::new();
+    //             while bytes.has_remaining() {
+    //                 let r = read_u8(&mut bytes)?;
+    //                 reasons.push(reason(r)?);
+    //             }
 
-                let unsuback = UnsubAck {
-                    pkid,
-                    reasons,
-                    properties,
-                };
+    //             let unsuback = UnsubAck {
+    //                 pkid,
+    //                 reasons,
+    //                 properties,
+    //             };
 
-                Ok(unsuback)
-            }
-        }
-    }
+    //             Ok(unsuback)
+    //         }
+    //     }
+    // }
 
     pub fn encode(&self, protocol: Protocol, buffer: &mut BytesMut) -> Result<usize, Error> {
         buffer.put_u8(0xB0);
@@ -127,6 +127,58 @@ impl UnsubAck {
     }
 }
 
+impl PacketDecoder for UnsubAck {
+    fn decode<B: Buf>(
+        protocol: Protocol,
+        fixed_header: &FixedHeader,
+        bytes: &mut B,
+    ) -> Result<Self> {
+        match protocol {
+            Protocol::V4 => {
+                if fixed_header.remaining_len != 2 {
+                    return Err(anyhow::Error::from(Error::PayloadSizeIncorrect));
+                }
+
+                let variable_header_index = fixed_header.fixed_header_len;
+                bytes.advance(variable_header_index);
+                let pkid = read_u16(bytes)?;
+                let unsuback = UnsubAck {
+                    pkid,
+                    reasons: vec![],
+                    properties: None,
+                };
+
+                Ok(unsuback)
+            }
+            Protocol::V5 => {
+                let variable_header_index = fixed_header.fixed_header_len;
+                bytes.advance(variable_header_index);
+
+                let pkid = read_u16(bytes)?;
+                let properties = UnsubAckProperties::extract(bytes)?;
+
+                if !bytes.has_remaining() {
+                    return Err(anyhow::Error::from(Error::MalformedPacket));
+                }
+
+                let mut reasons = Vec::new();
+                while bytes.has_remaining() {
+                    let r = read_u8(bytes)?;
+                    reasons.push(reason(r)?);
+                }
+
+                let unsuback = UnsubAck {
+                    pkid,
+                    reasons,
+                    properties,
+                };
+
+                Ok(unsuback)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnsubAckProperties {
     pub reason_string: Option<String>,
@@ -148,12 +200,13 @@ impl UnsubAckProperties {
         len
     }
 
-    pub fn extract(mut bytes: &mut Bytes) -> Result<Option<UnsubAckProperties>, Error> {
+    pub fn extract<B: Buf>(mut bytes: &mut B) -> Result<Option<UnsubAckProperties>, Error> {
         let mut reason_string = None;
         let mut user_properties = Vec::new();
 
-        let (properties_len_len, properties_len) = length(bytes.iter())?;
-        bytes.advance(properties_len_len);
+        // let (properties_len_len, properties_len) = length(bytes.iter())?;
+        // bytes.advance(properties_len_len);
+        let (_properties_len_len, properties_len) = parse_length(bytes)?;
         if properties_len == 0 {
             return Ok(None);
         }
@@ -263,9 +316,9 @@ mod test {
         let packetstream = &sample_bytes();
 
         stream.extend_from_slice(&packetstream[..]);
-        let fixed_header = parse_fixed_header(stream.iter()).unwrap();
-        let unsuback_bytes = stream.split_to(fixed_header.frame_length()).freeze();
-        let unsuback = UnsubAck::decode(Protocol::V5, fixed_header, unsuback_bytes).unwrap();
+        let fixed_header = parse_fixed_header(&stream[..]).unwrap();
+        let mut unsuback_bytes = stream.split_to(fixed_header.frame_length()).freeze();
+        let unsuback = UnsubAck::decode(Protocol::V5, &fixed_header, &mut unsuback_bytes).unwrap();
         assert_eq!(unsuback, sample());
     }
 
