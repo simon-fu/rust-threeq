@@ -20,7 +20,7 @@ pub type PacketType = tbytes::PacketType;
 
 pub type QoS = tbytes::QoS;
 
-use bytes::Buf;
+// use bytes::Buf;
 pub use tbytes::v5::*;
 
 // pub type Message = Publish;
@@ -135,14 +135,14 @@ impl PacketId {
     }
 }
 
-pub trait Decoder: Sized {
-    fn decode<B: Buf + ExactSizeIterator>(buf: &mut B) -> Result<Self>;
-}
-
 // pub trait Decoder: Sized {
-//     fn decode<B: Buf>(protocol: Protocol, fixed_header: FixedHeader, buf: &mut B) -> Result<Self>;
+//     fn decode<B: Buf + ExactSizeIterator>(buf: &mut B) -> Result<Self>;
 // }
 
-pub trait Encoder: Sized {
-    fn encode<B: Buf>(buf: &mut B) -> Result<Self>;
-}
+// // pub trait Decoder: Sized {
+// //     fn decode<B: Buf>(protocol: Protocol, fixed_header: FixedHeader, buf: &mut B) -> Result<Self>;
+// // }
+
+// pub trait Encoder: Sized {
+//     fn encode<B: Buf>(buf: &mut B) -> Result<Self>;
+// }

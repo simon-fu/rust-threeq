@@ -12,7 +12,7 @@ struct CmdArgs {
     cmd: SubCmd,
 }
 
-#[derive(Clap, Debug, PartialEq)]
+#[derive(Clap, Debug)]
 enum SubCmd {
     PulsarRead(pulsar::ReadArgs),
 }

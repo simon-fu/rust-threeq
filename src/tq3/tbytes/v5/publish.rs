@@ -1,3 +1,5 @@
+use crate::tq3::hex::BinStrLine;
+
 use super::*;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -387,17 +389,27 @@ impl PublishProperties {
 
 impl fmt::Debug for Publish {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Publish {{ Topic = {}, Qos = {:?}, Retain = {}, Pkid = {:?}, Payload Size = {}, dup = {}, prop = {:?} }}",
-            self.topic,
-            self.qos,
-            self.retain,
-            self.pkid,
-            self.payload.len(),
-            self.dup,
-            self.properties
-        )
+        f.debug_struct("Publish")
+            .field("topic", &self.topic)
+            .field("qos", &self.qos)
+            .field("retain", &self.retain)
+            .field("pkid", &self.pkid)
+            .field("dup", &self.dup)
+            .field("properties", &self.properties)
+            .field("payload", &self.payload.dump_bin())
+            .finish()
+
+        // write!(
+        //     f,
+        //     "Publish {{ Topic = {}, Qos = {:?}, Retain = {}, Pkid = {:?}, Payload Size = {}, dup = {}, prop = {:?} }}",
+        //     self.topic,
+        //     self.qos,
+        //     self.retain,
+        //     self.pkid,
+        //     self.payload.len(),
+        //     self.dup,
+        //     self.properties
+        // )
     }
 }
 

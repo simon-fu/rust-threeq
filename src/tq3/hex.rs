@@ -18,9 +18,9 @@ pub fn hex_line_write<W: std::fmt::Write, T: AsRef<[u8]>>(
         group: 0,
         ..HexConfig::default()
     };
-    write!(f, "|")?;
-    write!(f, "{}", source.len())?;
-    write!(f, "|")?;
+    // write!(f, "|")?;
+    write!(f, "|bin({})|", source.len())?;
+    // write!(f, "|")?;
     hex_write(f, &v, cfg)?;
     write!(f, "|")?;
     if source.len() > 16 {
@@ -40,7 +40,7 @@ pub fn str_or_hex_line_write<W: std::fmt::Write, T: AsRef<[u8]>>(
     }
 
     if let Ok(s) = std::str::from_utf8(source) {
-        write!(f, "|str|{}|", s)?;
+        write!(f, "|str({})|{}|", source.len(), s)?;
         if source.len() > 16 {
             write!(f, "..")?;
         }
