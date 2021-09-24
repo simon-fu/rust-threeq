@@ -1,5 +1,6 @@
 use clap::Clap;
 use rust_threeq::tq3;
+use rust_threeq::tq3::app;
 use std::fmt::Debug;
 
 mod common;
@@ -9,7 +10,7 @@ mod pulsar;
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
 #[derive(Clap, Debug)]
-#[clap(name = "threeq bench", author, about, version)]
+#[clap(name = "rthreeq bench", author, about, version=app::version_long())]
 struct CmdArgs {
     //#[clap(arg_enum, short = 't', long = "type", long_about = "bench type", default_value = "mqtt")]
     #[clap(subcommand)]

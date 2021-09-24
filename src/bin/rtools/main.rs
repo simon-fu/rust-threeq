@@ -1,12 +1,13 @@
 use anyhow::Result;
 use clap::Clap;
 use rust_threeq::tq3;
+use rust_threeq::tq3::app;
 
 mod pulsar;
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
 #[derive(Clap, Debug)]
-#[clap(name = "threeq tools", author, about, version)]
+#[clap(name = "rthreeq tools", author, about, version=app::version_long())]
 struct CmdArgs {
     #[clap(subcommand)]
     cmd: SubCmd,

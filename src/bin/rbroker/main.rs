@@ -14,6 +14,7 @@ TODO:
 use anyhow::{bail, Result};
 use bytes::{Bytes, BytesMut};
 use clap::Clap;
+use rust_threeq::tq3::app;
 use rust_threeq::tq3::{self, tbytes::PacketDecoder, tt};
 use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc, time::Duration};
@@ -62,7 +63,7 @@ fn call_malloc_trim() -> bool {
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
 #[derive(Clap, Debug, Default)]
-#[clap(name = "threeq broker", author, about, version)]
+#[clap(name = "rthreeq broker", author, about, version=app::version_long())]
 struct Config {
     #[clap(
         short = 'l',

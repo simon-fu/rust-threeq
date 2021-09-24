@@ -18,6 +18,8 @@ pub mod histogram;
 
 pub mod hex;
 
+pub mod app;
+
 lazy_static::lazy_static! {
     static ref BASE:std::time::Instant = std::time::Instant::now();
 

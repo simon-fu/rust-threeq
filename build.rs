@@ -7,5 +7,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // tonic_build::compile_protos("proto/service.proto")?;
     prost_build::compile_protos(&["proto/zrpc.proto", "proto/znodes.proto"], &["proto/"])?;
     prost_build::compile_protos(&["proto/threeq.proto"], &["proto/"])?;
+
+    built::write_built_file().expect("Failed to acquire build-time information");
+
     Ok(())
 }
