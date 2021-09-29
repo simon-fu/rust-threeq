@@ -583,6 +583,8 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
     let pulsar: Pulsar<_> = Pulsar::builder(&args.url, TokioExecutor).build().await?;
     let admin = Admin::new(args.rest.clone());
 
+    info!("clusters: {:?}", admin.list_clusters().await?);
+
     let tparts: TopicParts = args.topic.parse()?;
     let last_index = admin.get_last_msgid(&tparts).await?;
     info!("get info of {:?}", args.topic);

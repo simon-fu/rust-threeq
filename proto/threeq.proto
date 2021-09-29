@@ -32,13 +32,6 @@ enum Events {
     MALFORMED = 7;
 }
 
-// message MessageHeaderInfo {
-//     optional string clientid = 1;
-//     optional string user = 2;
-//     uint64 connid = 3;
-//     uint64 msgid = 4;
-// }
-
 
 message ControlHeaderInfo {
     optional string clientid = 1;
@@ -59,7 +52,7 @@ message DownlinkMessage {
     ControlHeaderInfo header = 1;
     bytes packet = 2;
     uint32 size = 3;
-    string code = 5;
+    string code = 4;
 }
 
 // type 2
@@ -68,6 +61,7 @@ message Subscription {
     uint32 count = 2;
     bytes packet = 3;
     map<string, string> codes = 4;      // topicfilter => code
+    string node = 5;
 }
 
 // type 3
@@ -76,6 +70,7 @@ message UnSubscription {
     uint32 count = 2;
     bytes packet = 3;
     map<string, string> codes = 4;      // topicfilter => code
+    string node = 5;
 }
 
 // type 4
@@ -86,6 +81,7 @@ message Connection {
     bytes packet = 4;
     string network = 5;
     string ip = 6;
+    string node = 7;
 }
 
 // type 5
@@ -100,6 +96,7 @@ message SessionClose {
     ControlHeaderInfo header = 1;
     uint32 oss = 2;
     string code = 3;
+    string node = 4;
 }
 
 // type 7

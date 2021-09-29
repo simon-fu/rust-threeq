@@ -105,6 +105,12 @@ impl Admin {
         Ok(())
     }
 
+    pub async fn list_clusters(&self) -> Result<Vec<String>> {
+        // GET /admin/v2/clusters
+        let path = format!("{}/admin/v2/clusters", self.url);
+        Ok(self.get(&path).await?)
+    }
+
     // pub async fn list_tenants(&self) -> Result<Vec<String>> {
     //     // curl http://localhost:18080/admin/v2/tenants
     //     let path = format!("{}/admin/v2/tenants", self.url);
