@@ -580,6 +580,10 @@ fn handle_msg(args: &ReadArgs, data: &Data, flags: &mut BitFlags<AMatchs>) -> Re
 }
 
 pub async fn run_read(args: &ReadArgs) -> Result<()> {
+    info!("args=[{:?}]", args);
+    info!("args[url]=[{:?}]", args.url);
+    info!("args[rest]=[{:?}]", args.rest);
+
     let pulsar: Pulsar<_> = Pulsar::builder(&args.url, TokioExecutor).build().await?;
     let admin = Admin::new(args.rest.clone());
 
@@ -590,6 +594,10 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
     info!("get info of {:?}", args.topic);
     info!("  - location: {:?}", admin.lookup_topic(&tparts).await?);
     info!("  - last-msg: {:?}", last_index);
+    info!(
+        "  - internal-state: {:?}",
+        admin.topic_internal_state(&tparts).await?
+    );
 
     let mut consumer: Consumer = {
         let mut builder = TopicConsumerBuilder::new(&pulsar, &admin)
@@ -602,10 +610,13 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
                 PosBegin::Index(index) => builder.with_begin_entry(index.clone()),
                 PosBegin::Timestamp(ts) => builder.with_begin_timestamp(ts.0),
             },
-            None => builder.with_begin_timestamp(0),
+            None => builder, //builder.with_begin_timestamp(0),
         };
 
-        builder.build().await?
+        builder
+            .build()
+            .await
+            .with_context(|| "fail to build consumer")?
     };
 
     let mut num_matchs = 0;

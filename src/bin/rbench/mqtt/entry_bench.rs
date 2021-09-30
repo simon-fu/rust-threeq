@@ -45,7 +45,10 @@ impl common::Suber for Suber {
             .await?;
         for reason in &ack.return_codes {
             if !reason.is_success() {
-                bail!(format!("{:?}", ack));
+                bail!(format!(
+                    "subscribe [{}], [{:?}] fail, {:?}",
+                    self.topic, cfg.subs.qos, ack
+                ));
             }
         }
 

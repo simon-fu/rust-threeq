@@ -108,7 +108,10 @@ impl Admin {
     pub async fn list_clusters(&self) -> Result<Vec<String>> {
         // GET /admin/v2/clusters
         let path = format!("{}/admin/v2/clusters", self.url);
-        Ok(self.get(&path).await?)
+        Ok(self
+            .get(&path)
+            .await
+            .with_context(|| "fail to list clusters")?)
     }
 
     // pub async fn list_tenants(&self) -> Result<Vec<String>> {
@@ -126,18 +129,18 @@ impl Admin {
     //     Ok(v)
     // }
 
-    // pub async fn topic_internal_state(&self, topic: &Topic) -> Result<TopicInternalState> {
-    //     //GET /admin/v2/:schema/:tenant/:namespace/:topic/internalStats
-    //     let path = format!(
-    //         "{}/admin/v2/{}/{}/{}/{}/internalStats",
-    //         self.url, topic.schema, topic.tenant, topic.namespace, topic.topic
-    //     );
-    //     Ok(self
-    //         .get(&path)
-    //         .await
-    //         .context(here!())
-    //         .context("fail to get topic internal state")?)
-    // }
+    pub async fn topic_internal_state(&self, topic: &TopicParts) -> Result<TopicInternalState> {
+        //GET /admin/v2/:schema/:tenant/:namespace/:topic/internalStats
+        let path = format!(
+            "{}/admin/v2/{}/{}/{}/{}/internalStats",
+            self.url, topic.schema, topic.tenant, topic.namespace, topic.topic
+        );
+        Ok(self
+            .get(&path)
+            .await
+            .with_context(|| here!())
+            .with_context(|| "fail to get topic internal state")?)
+    }
 
     // pub async fn unsubscribe(&self, topic: &Topic, sub_name: &str) -> Result<()> {
     //     // DELETE /admin/v2/namespaces/:tenant/:namespace/:topic/subscription/:subscription
@@ -390,7 +393,13 @@ impl<'a, Exe: pulsar::Executor> TopicConsumerBuilder<'a, Exe> {
             bail!("expect consumer_name");
         }
 
-        let topic: TopicParts = self.args.topic.as_ref().unwrap().parse()?;
+        let topic: TopicParts = self
+            .args
+            .topic
+            .as_ref()
+            .unwrap()
+            .parse()
+            .with_context(|| here!())?;
         let sub_name = self.args.sub_name.unwrap();
 
         let mut builder = self
@@ -415,19 +424,21 @@ impl<'a, Exe: pulsar::Executor> TopicConsumerBuilder<'a, Exe> {
             // create durable subscription
             {
                 let builder0 = builder.clone();
-                let _consumer: pulsar::Consumer<T, Exe> = builder0.build().await?;
+                let _consumer: pulsar::Consumer<T, Exe> =
+                    builder0.build().await.with_context(|| here!())?;
             }
 
             //debug!("reseting cursor to timestamp {} ...", time_milli);
             self.admin
                 .reset_cursor(&topic, &sub_name, time_milli)
-                .await?;
+                .await
+                .with_context(|| here!())?;
             // debug!("reseting cursor to timestamp {} done", time_milli);
         }
 
         options = options.durable(true);
         builder = builder.with_options(options);
-        let consumer = builder.build().await?;
+        let consumer = builder.build().await.with_context(|| here!())?;
 
         Ok(consumer)
     }
