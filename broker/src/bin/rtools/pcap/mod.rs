@@ -407,13 +407,15 @@ async fn run_file(file: &str) -> Result<()> {
 async fn run_tools(file: &str) -> Result<()> {
     use libpcap_analyzer::*;
     use libpcap_tools::{Config, PcapDataEngine, PcapEngine};
-    
+
     let factory = plugins::PluginsFactory::default();
     println!("pcap-analyzer available plugin builders:");
     factory.iter_builders(|name| println!("    {}", name));
 
     let config = Config::default();
-    let registry = factory.build_plugins(&config).expect("Could not build factory");
+    let registry = factory
+        .build_plugins(&config)
+        .expect("Could not build factory");
     {
         println!("pcap-analyzer instanciated plugins:");
         registry.run_plugins(
@@ -422,13 +424,23 @@ async fn run_tools(file: &str) -> Result<()> {
                 println!("  {}", p.name());
                 let t = p.plugin_type();
                 print!("    layers: ");
-                if t & PLUGIN_L2 != 0 { print!("  L2"); }
-                if t & PLUGIN_L3 != 0 { print!("  L3"); }
-                if t & PLUGIN_L4 != 0 { print!("  L4"); }
+                if t & PLUGIN_L2 != 0 {
+                    print!("  L2");
+                }
+                if t & PLUGIN_L3 != 0 {
+                    print!("  L3");
+                }
+                if t & PLUGIN_L4 != 0 {
+                    print!("  L4");
+                }
                 println!();
                 print!("    events: ");
-                if t & PLUGIN_FLOW_NEW != 0 { print!("  FLOW_NEW"); }
-                if t & PLUGIN_FLOW_DEL != 0 { print!("  FLOW_DEL"); }
+                if t & PLUGIN_FLOW_NEW != 0 {
+                    print!("  FLOW_NEW");
+                }
+                if t & PLUGIN_FLOW_DEL != 0 {
+                    print!("  FLOW_DEL");
+                }
                 println!();
             },
         );
@@ -446,31 +458,29 @@ async fn run_tools(file: &str) -> Result<()> {
         let file = std::fs::File::open(file)?;
         Box::new(file) as Box<dyn std::io::Read>
     };
-    
+
     let mut engine = {
         let analyzer = Analyzer::new(Arc::new(registry), &config);
         Box::new(PcapDataEngine::new(analyzer, &config)) as Box<dyn PcapEngine>
     };
     engine.run(&mut input_reader).expect("run analyzer");
 
-
-
     // use libpcap_tools::{Config, Error, Packet, ParseContext, PcapAnalyzer, PcapDataEngine, PcapEngine};
     // #[derive(Default)]
     // pub struct ExampleAnalyzer {
     //     packet_count: usize,
     // }
-    
+
     //  impl PcapAnalyzer for ExampleAnalyzer {
     //      fn handle_packet(&mut self, packet: &Packet, ctx: &ParseContext) -> Result<(), Error> {
     //          debug!("{:?}, {:?}", packet, ctx.first_packet_ts);
     //          Ok(())
     //      }
     // }
-    
+
     // let mut file = std::fs::File::open(file)
     // .with_context(|| format!("fail to open {}", file))?;
-        
+
     // let config = Config::default();
     // let analyzer = ExampleAnalyzer::default();
     // let mut engine = PcapDataEngine::new(analyzer, &config);

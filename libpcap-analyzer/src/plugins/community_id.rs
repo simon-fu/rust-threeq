@@ -5,9 +5,9 @@ use crate::output;
 use crate::plugin_registry::PluginRegistry;
 use libpcap_tools::{Config, FlowID};
 
-use crate::plugin::{Plugin, PluginBuilderError, PluginResult};
 use crate::packet_info::PacketInfo;
 use crate::plugin::PLUGIN_L4;
+use crate::plugin::{Plugin, PluginBuilderError, PluginResult};
 use indexmap::IndexMap;
 use libpcap_tools::{FiveTuple, Packet};
 use serde_json::json;
@@ -24,12 +24,18 @@ pub struct CommunityID {
 pub struct CommunityIDBuilder;
 
 impl crate::plugin::PluginBuilder for CommunityIDBuilder {
-    fn name(&self) -> &'static str { "CommunityIDBuilder" }
-    fn build(&self, registry:&mut PluginRegistry, config:&Config) -> Result<(), PluginBuilderError> {
+    fn name(&self) -> &'static str {
+        "CommunityIDBuilder"
+    }
+    fn build(
+        &self,
+        registry: &mut PluginRegistry,
+        config: &Config,
+    ) -> Result<(), PluginBuilderError> {
         let seed = config.get_usize("plugin.community_id.seed").unwrap_or(0) as u16;
-        let plugin = CommunityID{
+        let plugin = CommunityID {
             seed,
-            ids:IndexMap::new(),
+            ids: IndexMap::new(),
         };
         let safe_p = build_safeplugin!(plugin);
         let id = registry.add_plugin(safe_p);
@@ -119,8 +125,8 @@ impl Plugin for CommunityID {
     fn save_results(&mut self, path: &str) -> Result<(), &'static str> {
         let results = self.get_results_json();
         // save data to file
-        let file = output::create_file(path, "community-ids.json")
-            .or(Err("Cannot create output file"))?;
+        let file =
+            output::create_file(path, "community-ids.json").or(Err("Cannot create output file"))?;
         serde_json::to_writer(file, &results).or(Err("Cannot save results to file"))?;
         Ok(())
     }
