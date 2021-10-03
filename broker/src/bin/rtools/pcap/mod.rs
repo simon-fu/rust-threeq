@@ -8,6 +8,7 @@ use pcap::Linktype;
 use rust_threeq::tq3::hex::BinStrLine;
 use rust_threeq::tq3::{tbytes::PacketDecoder, tt};
 use std::convert::TryFrom;
+use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tt::FixedHeader;
 use tt::PacketType;
@@ -403,12 +404,89 @@ async fn run_file(file: &str) -> Result<()> {
     // Ok(())
 }
 
+async fn run_tools(file: &str) -> Result<()> {
+    use libpcap_analyzer::*;
+    use libpcap_tools::{Config, PcapDataEngine, PcapEngine};
+    
+    let factory = plugins::PluginsFactory::default();
+    println!("pcap-analyzer available plugin builders:");
+    factory.iter_builders(|name| println!("    {}", name));
+
+    let config = Config::default();
+    let registry = factory.build_plugins(&config).expect("Could not build factory");
+    {
+        println!("pcap-analyzer instanciated plugins:");
+        registry.run_plugins(
+            |_| true,
+            |p| {
+                println!("  {}", p.name());
+                let t = p.plugin_type();
+                print!("    layers: ");
+                if t & PLUGIN_L2 != 0 { print!("  L2"); }
+                if t & PLUGIN_L3 != 0 { print!("  L3"); }
+                if t & PLUGIN_L4 != 0 { print!("  L4"); }
+                println!();
+                print!("    events: ");
+                if t & PLUGIN_FLOW_NEW != 0 { print!("  FLOW_NEW"); }
+                if t & PLUGIN_FLOW_DEL != 0 { print!("  FLOW_DEL"); }
+                println!();
+            },
+        );
+    }
+
+    debug!("Plugins loaded:");
+    registry.run_plugins(
+        |_| true,
+        |p| {
+            debug!("  {}", p.name());
+        },
+    );
+
+    let mut input_reader = {
+        let file = std::fs::File::open(file)?;
+        Box::new(file) as Box<dyn std::io::Read>
+    };
+    
+    let mut engine = {
+        let analyzer = Analyzer::new(Arc::new(registry), &config);
+        Box::new(PcapDataEngine::new(analyzer, &config)) as Box<dyn PcapEngine>
+    };
+    engine.run(&mut input_reader).expect("run analyzer");
+
+
+
+    // use libpcap_tools::{Config, Error, Packet, ParseContext, PcapAnalyzer, PcapDataEngine, PcapEngine};
+    // #[derive(Default)]
+    // pub struct ExampleAnalyzer {
+    //     packet_count: usize,
+    // }
+    
+    //  impl PcapAnalyzer for ExampleAnalyzer {
+    //      fn handle_packet(&mut self, packet: &Packet, ctx: &ParseContext) -> Result<(), Error> {
+    //          debug!("{:?}, {:?}", packet, ctx.first_packet_ts);
+    //          Ok(())
+    //      }
+    // }
+    
+    // let mut file = std::fs::File::open(file)
+    // .with_context(|| format!("fail to open {}", file))?;
+        
+    // let config = Config::default();
+    // let analyzer = ExampleAnalyzer::default();
+    // let mut engine = PcapDataEngine::new(analyzer, &config);
+    // let _res = engine.run(&mut file).with_context(||"pcap engine run fail");
+
+    std::process::exit(0);
+    // Ok(())
+}
+
 pub async fn run_read_mqtt_pcap_file(args: &ReadMqttPcapArgs) -> Result<()> {
     if args.file.is_empty() {
         run_read_mqtt_bin_file(&args.file).await?;
         return Ok(());
     } else {
-        run_file(&args.file).await?;
+        // run_file(&args.file).await?;
+        run_tools(&args.file).await?;
     }
 
     use pcap_parser::traits::PcapReaderIterator;

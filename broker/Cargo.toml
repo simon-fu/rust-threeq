@@ -92,7 +92,8 @@ built = "0.5.1"
 pcap-parser = "=0.13.0"
 pcap = { version = "=0.9", features = ["capture-stream"] } 
 etherparse = "=0.9.0"
-
+libpcap-tools = { version="0.1.0", path="../libpcap-tools" }
+libpcap-analyzer = { version="0.1.0", path="../libpcap-analyzer" }
 
 [dev-dependencies]
 # criterion = "^0.3.4"
