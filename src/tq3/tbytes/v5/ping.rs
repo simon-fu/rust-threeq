@@ -3,6 +3,7 @@ use super::*;
 
 use bytes::{BufMut, BytesMut};
 
+#[derive(Debug)]
 pub struct PingReq;
 
 impl PingReq {
@@ -12,6 +13,7 @@ impl PingReq {
     }
 }
 
+#[derive(Debug)]
 pub struct PingResp;
 
 impl PingResp {

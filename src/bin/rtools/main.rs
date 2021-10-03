@@ -3,6 +3,7 @@ use clap::Clap;
 use rust_threeq::tq3;
 use rust_threeq::tq3::app;
 
+mod pcap;
 mod pulsar;
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
@@ -16,6 +17,7 @@ struct CmdArgs {
 #[derive(Clap, Debug)]
 enum SubCmd {
     PulsarRead(pulsar::ReadArgs),
+    MqttPcap(pcap::ReadMqttPcapArgs),
 }
 
 #[tokio::main]
@@ -28,7 +30,8 @@ async fn main() -> Result<()> {
     let args = CmdArgs::parse();
 
     match args.cmd {
-        SubCmd::PulsarRead(opt) => pulsar::run_read(&opt).await?,
+        SubCmd::PulsarRead(opts) => pulsar::run_read(&opts).await?,
+        SubCmd::MqttPcap(opts) => pcap::run_read_mqtt_pcap_file(&opts).await?,
     }
 
     Ok(())
