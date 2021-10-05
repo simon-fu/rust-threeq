@@ -265,7 +265,11 @@ fn handle_l3_ipv4(
     if analyzer.do_checksums {
         let cksum = ::pnet_packet::ipv4::checksum(&ipv4);
         if cksum != ipv4.get_checksum() {
-            warn!("IPv4: invalid checksum");
+            warn!(
+                "IPv4: invalid checksum, expect {} but {}",
+                ipv4.get_checksum(),
+                cksum
+            );
         }
     }
 

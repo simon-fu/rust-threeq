@@ -6,7 +6,7 @@ extern crate log;
 
 mod flow_map;
 mod layers;
-mod packet_info;
+pub mod packet_info; // make pub by simon
 pub use flow_map::FlowMap;
 pub use layers::*;
 

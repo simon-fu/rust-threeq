@@ -1,11 +1,9 @@
 use anyhow::{bail, Context, Result};
 use bytes::{Buf, BytesMut};
 use clap::{Clap, ValueHint};
-use log::debug;
+use log::{debug, info};
 
 use async_trait::async_trait;
-use pcap::Linktype;
-use rust_threeq::tq3::hex::BinStrLine;
 use rust_threeq::tq3::{tbytes::PacketDecoder, tt};
 use std::convert::TryFrom;
 use std::sync::Arc;
@@ -268,182 +266,168 @@ async fn run_read_mqtt_bin_file(file: &str) -> Result<()> {
     Ok(())
 }
 
-// fn build_tcp_packet() -> Vec<u8>{
+// async fn run_file(file: &str) -> Result<()> {
 
-//     //setup the packet headers
-//     let builder = etherparse::PacketBuilder::
-//     ethernet2([1,2,3,4,5,6],     //source mac
-//                [7,8,9,10,11,12]) //destionation mac
-//     .ipv4([192,168,1,1], //source ip
-//           [192,168,1,2], //desitionation ip
-//           20)            //time to life
-//     .tcp(21,    //source port
-//          1234,  //desitnation port
-//          1,     //sequence number
-//          26180) //window size
+//     use pcap::Capture;
+//     use pcap::Linktype;
+//     use rust_threeq::tq3::hex::BinStrLine;
+//     let mut cap = Capture::from_file(file).with_context(|| format!("fail to open {}", file))?;
+//     // cap.filter("tcp port 1883", true)?;
+//     let link_type = cap.get_datalink();
+//     debug!(
+//         "link type {:?}, {}, {}",
+//         link_type,
+//         link_type.get_name()?,
+//         link_type.get_description()?
+//     );
+//     let mut num = 0u64;
+//     while let Ok(packet) = cap.next() {
+//         let data = packet.data.to_owned();
+//         let len = packet.header.len;
+//         let ts: String = format!(
+//             "{}.{:06}",
+//             &packet.header.ts.tv_sec, &packet.header.ts.tv_usec
+//         );
+//         num += 1;
+//         debug!("== No.{}, {}, {}, {}", num, ts, len, data.dump_bin());
 
-//     //set additional tcp header fields
-//     .ns() //set the ns flag
-//     //supported flags: ns(), fin(), syn(), rst(), psh(), ece(), cwr()
-//     .ack(123) //ack flag + the ack number
-//     .urg(23) //urg flag + urgent pointer
+//         let value = if link_type == Linktype::NULL {
+//             etherparse::SlicedPacket::from_ip(&data[4..])?
+//         } else {
+//             etherparse::SlicedPacket::from_ethernet(&data[0..])?
+//         };
+//         debug!("  link: {:?}", value.link);
+//         debug!("  vlan: {:?}", value.vlan);
+//         debug!("  ip: {:?}", value.ip);
+//         match &value.transport {
+//             Some(tslice) => match tslice {
+//                 etherparse::TransportSlice::Udp(_udp) => {
+//                     debug!("  transport: {:?}", value.transport);
+//                 }
+//                 etherparse::TransportSlice::Tcp(tcp) => {
+//                     let ip = match value.ip.unwrap() {
+//                         etherparse::InternetSlice::Ipv4(ipv4) => {
+//                             let src = ipv4.source_addr();
+//                             let dst = ipv4.destination_addr();
+//                             (src.to_string(), dst.to_string())
+//                         }
+//                         etherparse::InternetSlice::Ipv6(_ipv6, _) => todo!(),
+//                     };
+//                     debug!(
+//                         "  transport: {}:{} => {}:{}",
+//                         ip.0,
+//                         tcp.source_port(),
+//                         ip.1,
+//                         tcp.destination_port(),
+//                     );
+//                     debug!("    raw {}", tcp.slice().dump_bin());
+//                 }
+//             },
+//             None => {
+//                 debug!("  transport: {:?}", value.transport);
+//             }
+//         }
+//         debug!("  payload: {:?}", value.payload.dump_bin());
 
-//     //tcp header options
-//     .options(&[
-//         etherparse::TcpOptionElement::Nop,
-//         etherparse::TcpOptionElement::MaximumSegmentSize(1234)
-//     ]).unwrap();
+//         // match etherparse::PacketHeaders::from_ethernet_slice(&packet) {
+//         //     Err(value) => println!("Err {:?}", value),
+//         //     Ok(value) => {
+//         //         println!("  link: {:?}", value.link);
+//         //         println!("  vlan: {:?}", value.vlan);
+//         //         println!("  ip: {:?}", value.ip);
+//         //         println!("  transport: {:?}", value.transport);
+//         //     }
+//         // }
 
-//     //payload of the tcp packet
-//     let payload = [1,2,3,4,5,6,7,8];
+//         // let packets = packets.clone();
 
-//     //get some memory to store the result
-//     let mut result = Vec::<u8>::with_capacity(
-//                     builder.size(payload.len()));
+//         // pool.execute(move || {
+//         //     let packet_parse = PacketParse::new();
+//         //     let parsed_packet = packet_parse.parse_packet(data, len, ts);
 
-//     //serialize
-//     //this will automatically set all length fields, checksums and identifiers (ethertype & protocol)
-//     builder.write(&mut result, &payload).unwrap();
-//     println!("{:?}", result);
-//     result
+//         //     packets.lock().unwrap().push(parsed_packet);
+//         // });
+//     }
+
+//     std::process::exit(0);
+//     // Ok(())
 // }
 
-async fn run_file(file: &str) -> Result<()> {
-    // let packet = build_tcp_packet();
-    // debug!("build tcp packet:");
-    // match etherparse::SlicedPacket::from_ethernet(&packet) {
-    //     Err(value) => println!("Err {:?}", value),
-    //     Ok(value) => {
-    //         debug!("  link: {:?}", value.link);
-    //         debug!("  vlan: {:?}", value.vlan);
-    //         debug!("  ip: {:?}", value.ip);
-    //         debug!("  transport: {:?}", value.transport);
-    //     }
-    // }
+use libpcap_analyzer::default_plugin_builder;
+use libpcap_analyzer::packet_info::PacketInfo;
+use libpcap_analyzer::{Plugin, PluginResult, PLUGIN_FLOW_DEL, PLUGIN_FLOW_NEW, PLUGIN_L4};
+use libpcap_tools::pcap_parser::nom::HexDisplay;
+use libpcap_tools::{Flow, Packet};
 
-    use pcap::Capture;
-    let mut cap = Capture::from_file(file).with_context(|| format!("fail to open {}", file))?;
-    // cap.filter("tcp port 1883", true)?;
-    let link_type = cap.get_datalink();
-    debug!(
-        "link type {:?}, {}, {}",
-        link_type,
-        link_type.get_name()?,
-        link_type.get_description()?
-    );
-    let mut num = 0u64;
-    while let Ok(packet) = cap.next() {
-        let data = packet.data.to_owned();
-        let len = packet.header.len;
-        let ts: String = format!(
-            "{}.{:06}",
-            &packet.header.ts.tv_sec, &packet.header.ts.tv_usec
-        );
-        num += 1;
-        debug!("== No.{}, {}, {}, {}", num, ts, len, data.dump_bin());
+#[derive(Default)]
+pub struct MqttDump;
+default_plugin_builder!(MqttDump, MqttDumpBuilder);
 
-        let value = if link_type == Linktype::NULL {
-            etherparse::SlicedPacket::from_ip(&data[4..])?
-        } else {
-            etherparse::SlicedPacket::from_ethernet(&data[0..])?
-        };
-        debug!("  link: {:?}", value.link);
-        debug!("  vlan: {:?}", value.vlan);
-        debug!("  ip: {:?}", value.ip);
-        match &value.transport {
-            Some(tslice) => match tslice {
-                etherparse::TransportSlice::Udp(_udp) => {
-                    debug!("  transport: {:?}", value.transport);
-                }
-                etherparse::TransportSlice::Tcp(tcp) => {
-                    let ip = match value.ip.unwrap() {
-                        etherparse::InternetSlice::Ipv4(ipv4) => {
-                            let src = ipv4.source_addr();
-                            let dst = ipv4.destination_addr();
-                            (src.to_string(), dst.to_string())
-                        }
-                        etherparse::InternetSlice::Ipv6(_ipv6, _) => todo!(),
-                    };
-                    debug!(
-                        "  transport: {}:{} => {}:{}",
-                        ip.0,
-                        tcp.source_port(),
-                        ip.1,
-                        tcp.destination_port(),
-                    );
-                    debug!("    raw {}", tcp.slice().dump_bin());
-                }
-            },
-            None => {
-                debug!("  transport: {:?}", value.transport);
-            }
-        }
-        debug!("  payload: {:?}", value.payload.dump_bin());
-
-        // match etherparse::PacketHeaders::from_ethernet_slice(&packet) {
-        //     Err(value) => println!("Err {:?}", value),
-        //     Ok(value) => {
-        //         println!("  link: {:?}", value.link);
-        //         println!("  vlan: {:?}", value.vlan);
-        //         println!("  ip: {:?}", value.ip);
-        //         println!("  transport: {:?}", value.transport);
-        //     }
-        // }
-
-        // let packets = packets.clone();
-
-        // pool.execute(move || {
-        //     let packet_parse = PacketParse::new();
-        //     let parsed_packet = packet_parse.parse_packet(data, len, ts);
-
-        //     packets.lock().unwrap().push(parsed_packet);
-        // });
+impl Plugin for MqttDump {
+    fn name(&self) -> &'static str {
+        "MqttDump"
     }
 
-    std::process::exit(0);
-    // Ok(())
+    fn plugin_type(&self) -> u16 {
+        PLUGIN_FLOW_NEW | PLUGIN_FLOW_DEL | PLUGIN_L4
+    }
+
+    fn flow_created(&mut self, flow: &Flow) {
+        info!("MqttDump::flow_created: {:?}", flow);
+    }
+
+    fn flow_destroyed(&mut self, flow: &Flow) {
+        info!("MqttDump::flow_destroyed: {:?}", flow);
+    }
+
+    fn handle_layer_transport<'s, 'i>(
+        &'s mut self,
+        _packet: &'s Packet,
+        pinfo: &PacketInfo,
+    ) -> PluginResult<'i> {
+        let five_tuple = &pinfo.five_tuple;
+        info!("MqttDump::handle_l4");
+        debug!("    5-t: {}", five_tuple);
+        debug!("    to_server: {}", pinfo.to_server);
+        debug!("    l3_type: 0x{:x}", pinfo.l3_type);
+        debug!("    l4_data_len: {}", pinfo.l4_data.len());
+        debug!("    l4_type: {}", pinfo.l4_type);
+        debug!(
+            "    l4_payload_len: {}",
+            pinfo.l4_payload.map_or(0, |d| d.len())
+        );
+        if let Some(flow) = pinfo.flow {
+            let five_tuple = &flow.five_tuple;
+            debug!(
+                "    flow: [{}]:{} -> [{}]:{} [{}]",
+                five_tuple.src,
+                five_tuple.src_port,
+                five_tuple.dst,
+                five_tuple.dst_port,
+                five_tuple.proto
+            );
+        }
+        if let Some(d) = pinfo.l4_payload {
+            debug!("    l4_payload:\n{}", d.to_hex(16));
+        }
+        PluginResult::None
+    }
 }
 
 async fn run_tools(file: &str) -> Result<()> {
+    // TODO: libpcap_analyzer do NOT support tcp disconnect ？
+
     use libpcap_analyzer::*;
     use libpcap_tools::{Config, PcapDataEngine, PcapEngine};
 
-    let factory = plugins::PluginsFactory::default();
-    println!("pcap-analyzer available plugin builders:");
-    factory.iter_builders(|name| println!("    {}", name));
+    let mut config = Config::default();
+    config.set("do_checksums", false);
 
-    let config = Config::default();
-    let registry = factory
-        .build_plugins(&config)
-        .expect("Could not build factory");
-    {
-        println!("pcap-analyzer instanciated plugins:");
-        registry.run_plugins(
-            |_| true,
-            |p| {
-                println!("  {}", p.name());
-                let t = p.plugin_type();
-                print!("    layers: ");
-                if t & PLUGIN_L2 != 0 {
-                    print!("  L2");
-                }
-                if t & PLUGIN_L3 != 0 {
-                    print!("  L3");
-                }
-                if t & PLUGIN_L4 != 0 {
-                    print!("  L4");
-                }
-                println!();
-                print!("    events: ");
-                if t & PLUGIN_FLOW_NEW != 0 {
-                    print!("  FLOW_NEW");
-                }
-                if t & PLUGIN_FLOW_DEL != 0 {
-                    print!("  FLOW_DEL");
-                }
-                println!();
-            },
-        );
+    let mut registry = PluginRegistry::new();
+    let builder = Box::new(MqttDumpBuilder);
+    let r = builder.build(&mut registry, &config);
+    if let Err(e) = r {
+        bail!("build plugin fail, {:?}", e);
     }
 
     debug!("Plugins loaded:");
@@ -464,27 +448,6 @@ async fn run_tools(file: &str) -> Result<()> {
         Box::new(PcapDataEngine::new(analyzer, &config)) as Box<dyn PcapEngine>
     };
     engine.run(&mut input_reader).expect("run analyzer");
-
-    // use libpcap_tools::{Config, Error, Packet, ParseContext, PcapAnalyzer, PcapDataEngine, PcapEngine};
-    // #[derive(Default)]
-    // pub struct ExampleAnalyzer {
-    //     packet_count: usize,
-    // }
-
-    //  impl PcapAnalyzer for ExampleAnalyzer {
-    //      fn handle_packet(&mut self, packet: &Packet, ctx: &ParseContext) -> Result<(), Error> {
-    //          debug!("{:?}, {:?}", packet, ctx.first_packet_ts);
-    //          Ok(())
-    //      }
-    // }
-
-    // let mut file = std::fs::File::open(file)
-    // .with_context(|| format!("fail to open {}", file))?;
-
-    // let config = Config::default();
-    // let analyzer = ExampleAnalyzer::default();
-    // let mut engine = PcapDataEngine::new(analyzer, &config);
-    // let _res = engine.run(&mut file).with_context(||"pcap engine run fail");
 
     std::process::exit(0);
     // Ok(())
