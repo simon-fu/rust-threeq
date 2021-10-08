@@ -826,8 +826,8 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
         tokio::pin!(ctrl_c_fut);
 
         tokio::select! {
-            _r = &mut task => {
-
+            r = &mut task => {
+                let _r = r?;
             }
 
             r = &mut ctrl_c_fut => {
