@@ -738,7 +738,7 @@ async fn run_topic(
         let time_str = time1.format("%m-%d %H:%M:%S%.3f");
 
         let str = format!(
-            "====== No.{}, [P{}], [{}], [{}:{}:{}]",
+            "====== No.{}, [T{}], [{}], [{}:{}:{}]",
             output.num_packets,
             topic_inex,
             time_str,
