@@ -85,7 +85,7 @@ impl Admin {
             .get(&path)
             .await
             .context(here!())
-            .context("fail to get last msgid")?;
+            .with_context(|| "fail to get last msgid")?;
         Ok(s)
     }
 
@@ -114,6 +114,19 @@ impl Admin {
             .with_context(|| "fail to list clusters")?)
     }
 
+    pub async fn topic_get_partitions(&self, topic: &TopicParts) -> Result<TopicPartitions> {
+        // GET /admin/v2/:schema/:tenant/:namespace/:topic/partitions
+        let path = format!(
+            "{}/admin/v2/{}/{}/{}/{}/partitions",
+            self.url, topic.schema, topic.tenant, topic.namespace, topic.topic
+        );
+        Ok(self
+            .get(&path)
+            .await
+            .with_context(|| here!())
+            .with_context(|| "fail to get topic internal state")?)
+    }
+
     // pub async fn list_tenants(&self) -> Result<Vec<String>> {
     //     // curl http://localhost:18080/admin/v2/tenants
     //     let path = format!("{}/admin/v2/tenants", self.url);
@@ -129,18 +142,18 @@ impl Admin {
     //     Ok(v)
     // }
 
-    pub async fn topic_internal_state(&self, topic: &TopicParts) -> Result<TopicInternalState> {
-        //GET /admin/v2/:schema/:tenant/:namespace/:topic/internalStats
-        let path = format!(
-            "{}/admin/v2/{}/{}/{}/{}/internalStats",
-            self.url, topic.schema, topic.tenant, topic.namespace, topic.topic
-        );
-        Ok(self
-            .get(&path)
-            .await
-            .with_context(|| here!())
-            .with_context(|| "fail to get topic internal state")?)
-    }
+    // pub async fn topic_internal_state(&self, topic: &TopicParts) -> Result<TopicInternalState> {
+    //     //GET /admin/v2/:schema/:tenant/:namespace/:topic/internalStats
+    //     let path = format!(
+    //         "{}/admin/v2/{}/{}/{}/{}/internalStats",
+    //         self.url, topic.schema, topic.tenant, topic.namespace, topic.topic
+    //     );
+    //     Ok(self
+    //         .get(&path)
+    //         .await
+    //         .with_context(|| here!())
+    //         .with_context(|| "fail to get topic internal state")?)
+    // }
 
     // pub async fn unsubscribe(&self, topic: &Topic, sub_name: &str) -> Result<()> {
     //     // DELETE /admin/v2/namespaces/:tenant/:namespace/:topic/subscription/:subscription
@@ -182,6 +195,16 @@ impl EntryIndex {
     }
 }
 
+impl Default for EntryIndex {
+    fn default() -> Self {
+        Self {
+            ledger_id: -1,
+            entry_id: -1,
+            partition_index: -1,
+        }
+    }
+}
+
 impl std::str::FromStr for EntryIndex {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -194,12 +217,12 @@ impl std::str::FromStr for EntryIndex {
             })
         } else if v.len() == 3 {
             Ok(Self {
-                partition_index: v[0].parse::<i32>()?,
-                ledger_id: v[1].parse::<i64>()?,
-                entry_id: v[2].parse::<i64>()?,
+                ledger_id: v[0].parse::<i64>()?,
+                entry_id: v[1].parse::<i64>()?,
+                partition_index: v[2].parse::<i32>()?,
             })
         } else {
-            bail!("entry index consist of {ledger_id}:{entry_id}");
+            bail!("entry index consist of {ledger_id}:{entry_id}:{partition_id}");
         }
     }
 }
@@ -210,7 +233,7 @@ impl<'de> serde::de::Visitor<'de> for DeserializeMessageIndexVisitor {
     type Value = EntryIndex;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("{ledger_id}:{entry_id}")
+        formatter.write_str("{ledger_id}:{entry_id}:{partition_id}")
     }
 
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
@@ -302,6 +325,12 @@ pub struct TopicInternalState {
     pub last_confirmed_entry: EntryIndex, // "4549:27" "4549:-1"
 
     pub ledgers: Vec<Ledger>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicPartitions {
+    pub partitions: i32,
 }
 
 mod my_date_format {

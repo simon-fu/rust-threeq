@@ -7,7 +7,7 @@ use enumflags2::{bitflags, BitFlags};
 use futures::TryStreamExt;
 use log::{debug, info};
 use prost::Message;
-use pulsar::{DeserializeMessage, Payload, Pulsar, TokioExecutor};
+use pulsar::{proto::MessageIdData, DeserializeMessage, Payload, Pulsar, TokioExecutor};
 use regex::Regex;
 use rust_threeq::{
     here,
@@ -30,9 +30,10 @@ pub struct ReadArgs {
 
     #[clap(
         long = "topic",
-        long_about = "pulsar topic, for example persistent://em/default/ev0"
+        long_about = "pulsar topic, for example persistent://em/default/ev0",
+        multiple = true
     )]
-    topic: String,
+    topics: Vec<String>,
 
     #[clap(
         long = "begin",
@@ -448,6 +449,7 @@ enum AMatchs {
     User = 0b100000,
 }
 
+#[inline]
 fn check_bytes_text_match(
     arg: &Option<RegexArg>,
     bytes: &Bytes,
@@ -464,6 +466,7 @@ fn check_bytes_text_match(
     }
 }
 
+#[inline]
 fn check_text_match(
     arg: &Option<RegexArg>,
     text: &str,
@@ -579,31 +582,125 @@ fn handle_msg(args: &ReadArgs, data: &Data, flags: &mut BitFlags<AMatchs>) -> Re
     }
 }
 
-pub async fn run_read(args: &ReadArgs) -> Result<()> {
-    info!("args=[{:?}]", args);
-    info!("args[url]=[{:?}]", args.url);
-    info!("args[rest]=[{:?}]", args.rest);
+#[derive(Default)]
+struct EndChecker {
+    end_indexes: Vec<(EntryIndex, bool)>,
+    num_finished: usize,
+}
 
-    let pulsar: Pulsar<_> = Pulsar::builder(&args.url, TokioExecutor).build().await?;
+impl EndChecker {
+    fn conver_index(p: i32) -> usize {
+        if p < 0 {
+            0
+        } else {
+            p as usize
+        }
+    }
+
+    fn set_partitions(&mut self, p: i32) {
+        let n = Self::conver_index(p);
+        self.end_indexes.clear();
+        self.end_indexes.reserve(n);
+        for _ in 0..n {
+            self.end_indexes.push((EntryIndex::default(), false));
+        }
+    }
+
+    fn set_index(&mut self, eindex: EntryIndex) -> Result<()> {
+        let index = Self::conver_index(eindex.partition_index);
+
+        if self.end_indexes.len() <= index {
+            bail!(
+                "EndChecker::set_index out of range, expect {} but {}",
+                self.end_indexes.len(),
+                index
+            );
+        }
+
+        self.end_indexes[index].0 = eindex;
+
+        Ok(())
+    }
+
+    fn check(&mut self, d: &MessageIdData) -> Result<bool> {
+        let index = Self::conver_index(d.partition.unwrap_or(0));
+
+        if self.end_indexes.len() <= index {
+            bail!(
+                "EndChecker::set_index out of range, expect {} but {}",
+                self.end_indexes.len(),
+                index
+            );
+        }
+
+        if !self.end_indexes[index].1 {
+            if self.end_indexes[index].0.equal_to(&d) {
+                self.end_indexes[index].1 = true;
+                self.num_finished += 1;
+            }
+        }
+
+        Ok(self.num_finished >= self.end_indexes.len())
+    }
+}
+
+#[derive(Debug, Default)]
+struct TaskOutput {
+    num_matchs: u64,
+    num_packets: u64,
+}
+
+async fn run_topic(
+    args: &ReadArgs,
+    topic: &str,
+    topic_inex: usize,
+    output: &mut TaskOutput,
+) -> Result<()> {
+    let pulsar: Pulsar<_> = Pulsar::builder(&args.url, TokioExecutor)
+        .build()
+        .await
+        .with_context(|| format!("pulsar url {}", args.url))?;
+
     let admin = Admin::new(args.rest.clone());
 
-    info!("clusters: {:?}", admin.list_clusters().await?);
+    let tparts: TopicParts = topic.parse()?;
 
-    let tparts: TopicParts = args.topic.parse()?;
-    let last_index = admin.get_last_msgid(&tparts).await?;
-    info!("get info of {:?}", args.topic);
-    info!("  - location: {:?}", admin.lookup_topic(&tparts).await?);
-    info!("  - last-msg: {:?}", last_index);
-    info!(
-        "  - internal-state: {:?}",
-        admin.topic_internal_state(&tparts).await?
-    );
+    let mut end_ck = EndChecker::default();
+
+    {
+        info!("get info of {:?}", topic);
+
+        let location = admin.lookup_topic(&tparts).await?;
+        info!("  - location: {:?}", location);
+
+        let partis = admin.topic_get_partitions(&tparts).await?.partitions;
+        info!("  - partitions: {:?}", partis);
+
+        // let state = admin.topic_internal_state(&tparts).await?;
+        // info!("  - internal-state: {:?}", state);
+
+        if partis > 0 {
+            end_ck.set_partitions(partis);
+            for n in 0..partis {
+                let child_topic = format!("{}-partition-{}", topic, n);
+                let child_tparts = child_topic.parse()?;
+                let last_index = admin.get_last_msgid(&child_tparts).await?;
+                info!("  - last-msg: {:?}", last_index);
+                end_ck.set_index(last_index)?;
+            }
+        } else {
+            end_ck.set_partitions(1);
+            let last_index = admin.get_last_msgid(&tparts).await?;
+            info!("  - last-msg: {:?}", last_index);
+            end_ck.set_index(last_index)?;
+        }
+    };
 
     let mut consumer: Consumer = {
         let mut builder = TopicConsumerBuilder::new(&pulsar, &admin)
             .with_consumer_name("rtools-consumer".to_string())
             .with_sub_name("rtools-sub".to_string())
-            .with_topic(&args.topic);
+            .with_topic(topic);
 
         builder = match &args.begin {
             Some(begin) => match begin {
@@ -619,8 +716,6 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
             .with_context(|| "fail to build consumer")?
     };
 
-    let mut num_matchs = 0;
-    let mut num = 0;
     loop {
         let r = consumer.try_next().await?;
         if r.is_none() {
@@ -636,16 +731,23 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
             break;
         }
 
+        output.num_packets += 1;
+
         let time1 = SystemTime::UNIX_EPOCH + Duration::from_millis(msg.metadata().publish_time);
         let time1: DateTime<Local> = time1.into();
         let time_str = time1.format("%m-%d %H:%M:%S%.3f");
 
         let str = format!(
-            "====== No.{}, [{}], [{}:{}]",
-            num,
+            "====== No.{}, [P{}], [{}], [{}:{}:{}]",
+            output.num_packets,
+            topic_inex,
             time_str,
             msg.message_id().ledger_id,
             msg.message_id().entry_id,
+            match msg.message_id().partition {
+                Some(n) => n,
+                None => -1,
+            },
         );
 
         let data = msg.deserialize().context(here!())?;
@@ -656,36 +758,86 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
             .context(here!())?;
 
         if !flags.is_empty() {
-            num_matchs += 1;
+            output.num_matchs += 1;
             info!(
-                "{}, [{:?}], {:?}",
+                "{}, [{:?}], [{}]-{:?}",
                 str,
                 etype,
-                flags.iter().collect::<Vec<_>>()
+                output.num_matchs,
+                flags.iter().collect::<Vec<_>>(),
             );
             info!("  {:?}\n", data);
         } else {
             debug!(
-                "{}, [{:?}], {:?}",
+                "{}, [{:?}], [{}]-{:?}",
                 str,
                 etype,
-                flags.iter().collect::<Vec<_>>()
+                output.num_matchs,
+                flags.iter().collect::<Vec<_>>(),
             );
             debug!("  {:?}\n", data);
         }
 
-        num += 1;
-
-        if args.num.is_some() && num >= *args.num.as_ref().unwrap() {
+        if args.num.is_some() && output.num_packets >= *args.num.as_ref().unwrap() {
             info!("reach max messages");
             break;
         }
 
-        if last_index.equal_to(msg.message_id()) {
+        if end_ck.check(msg.message_id())? {
             info!("reach last message");
             break;
         }
     }
-    info!("matchs [{}]", num_matchs);
+    Ok(())
+}
+
+async fn read_task(args: &ReadArgs, output: &mut TaskOutput) -> Result<()> {
+    info!("args=[{:?}]", args);
+    info!("args[url]=[{:?}]", args.url);
+    info!("args[rest]=[{:?}]", args.rest);
+
+    {
+        let admin = Admin::new(args.rest.clone());
+        info!("clusters: {:?}", admin.list_clusters().await?);
+
+        let _pulsar: Pulsar<_> = Pulsar::builder(&args.url, TokioExecutor)
+            .build()
+            .await
+            .with_context(|| format!("pulsar url {}", args.url))?;
+    }
+
+    // let mut output = TaskOutput::default();
+    for (i, topic) in args.topics.iter().enumerate() {
+        run_topic(args, topic, i, output)
+            .await
+            .with_context(|| format!("topic {}", topic))?;
+    }
+
+    Ok(())
+}
+
+pub async fn run_read(args: &ReadArgs) -> Result<()> {
+    let mut output = TaskOutput::default();
+    {
+        let task = read_task(&args, &mut output);
+        tokio::pin!(task);
+
+        let ctrl_c_fut = tokio::signal::ctrl_c();
+        tokio::pin!(ctrl_c_fut);
+
+        tokio::select! {
+            _r = &mut task => {
+
+            }
+
+            r = &mut ctrl_c_fut => {
+                r.with_context(||"failed to listen ctrl+c")?;
+                info!("got ctrl+c");
+            }
+        }
+    }
+
+    info!("{:?}", output);
+
     Ok(())
 }
