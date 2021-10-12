@@ -69,6 +69,7 @@ struct Puber {
 #[async_trait]
 impl common::Puber for Puber {
     async fn connect(&mut self) -> Result<()> {
+        info!("pub topic {}", self.topic);
         let batch_size = if self.config.raw().pubs.inflights > 1 {
             Some(self.config.raw().pubs.inflights as u32)
         } else {
@@ -137,6 +138,7 @@ impl common::Suber for Suber {
                     r#type: proto::schema::Type::None as i32,
                     ..Default::default()
                 }),
+                durable: Some(false),
                 ..Default::default()
             })
             .with_topic(&self.topic)
