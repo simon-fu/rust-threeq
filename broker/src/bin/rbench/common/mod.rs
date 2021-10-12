@@ -11,7 +11,11 @@ use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::Future;
 use histogram::Histogram;
-use rust_threeq::tq3::{self, limit::Rate, TryRecv, TryRecvResult, TS};
+use rust_threeq::tq3::{
+    self,
+    limit::{Rate, Traffic, TrafficSpeed},
+    TryRecv, TryRecvResult, TS,
+};
 use tokio::{
     sync::{mpsc, watch},
     task::JoinHandle,
@@ -87,66 +91,6 @@ impl InstantRange {
                 *self.last.as_ref().unwrap() - *t
             },
         )
-    }
-}
-
-const INTERVAL: Duration = Duration::from_millis(1000);
-
-#[derive(Debug, Default, Clone)]
-struct Traffic {
-    pub packets: u64,
-    pub bytes: u64,
-}
-
-impl Traffic {
-    fn inc(&mut self, bytes: u64) {
-        self.packets += 1;
-        self.bytes += bytes;
-    }
-}
-
-#[derive(Debug)]
-struct TrafficSpeed {
-    last_time: Instant,
-    next_time: Instant,
-    traffic: Traffic,
-}
-
-impl Default for TrafficSpeed {
-    fn default() -> Self {
-        Self {
-            last_time: Instant::now(),
-            next_time: Instant::now() + INTERVAL,
-            traffic: Traffic::default(),
-        }
-    }
-}
-
-impl TrafficSpeed {
-    fn reset(&mut self, now: Instant) {
-        self.last_time = now;
-        self.next_time = now + INTERVAL;
-    }
-
-    fn check_float(&mut self, now: Instant, t: &Traffic) -> Option<(f64, f64)> {
-        if now < self.next_time {
-            return None;
-        }
-        let d = now - self.last_time;
-        let d = d.as_millis() as u64;
-        if d == 0 {
-            return None;
-        }
-        let r = (
-            (t.packets - self.traffic.packets) as f64 * 1000.0 / d as f64,
-            (t.bytes - self.traffic.bytes) as f64 * 1000.0 / d as f64 / 1000.0,
-        );
-
-        self.traffic.packets = t.packets;
-        self.traffic.bytes = t.bytes;
-        self.reset(now);
-
-        return Some(r);
     }
 }
 
