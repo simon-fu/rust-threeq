@@ -121,7 +121,7 @@ enum TaskEvent {
     // Connected(Instant),
     Ready(Instant),
     Work(Instant),
-    Packet(Instant, usize, u64),
+    Packet(Instant, usize, u64, u64),
     Result(Instant, TaskStati),
     Finished(u64),
 }
@@ -147,7 +147,9 @@ struct Checker {
 }
 
 impl Checker {
-    pub fn input_and_check(&mut self, now_ms: i64, header: &body::Header) -> Result<u64> {
+    pub fn input_and_check(&mut self, now_ms: i64, header: &body::Header) -> Result<(u64, u64)> {
+        let mut lost = 0;
+
         if header.pubid >= self.items.len() {
             if header.pubid >= MAX_PUBS {
                 bail!(format!(
@@ -169,8 +171,9 @@ impl Checker {
         } else if header.seq < *next_seq {
             bail!(format!("expect seq {}, but {}", *next_seq, header.seq));
         } else if header.seq > *next_seq {
-            debug!("detect lost, expect seq {}, but {:?}", *next_seq, header);
-            self.stati.lost += header.seq - *next_seq;
+            // debug!("detect lost, expect seq {}, but {:?}", *next_seq, header);
+            lost = header.seq - *next_seq;
+            self.stati.lost += lost;
         }
 
         let latency = now_ms - header.ts;
@@ -191,7 +194,7 @@ impl Checker {
             }
         }
 
-        Ok(latency)
+        Ok((latency, lost))
     }
 
     pub fn check_lost(&mut self) {
@@ -290,12 +293,12 @@ impl<T: Suber + Send> SubSession<T> {
             };
 
             let header = body::Header::decode(&mut data);
-            let latency = checker.input_and_check(TS::now_ms(), &header)?;
+            let (latency, lost) = checker.input_and_check(TS::now_ms(), &header)?;
             trace!("recv packet {:?}", header);
 
             let _r = self
                 .tx
-                .send(TaskEvent::Packet(Instant::now(), data.len(), latency))
+                .send(TaskEvent::Packet(Instant::now(), data.len(), latency, lost))
                 .await;
         }
         let result_time = Instant::now();
@@ -387,8 +390,13 @@ impl<T: Puber + Send> PubSession<T> {
 
                     let _r = self
                         .tx
-                        .send(TaskEvent::Packet(Instant::now(), data.len(), 0))
+                        .send(TaskEvent::Packet(Instant::now(), data.len(), 0, 0))
                         .await;
+
+                    // if header.seq % 8 != 0 {
+                    //     // simulate lost // TODO: remove this
+                    //     self.client.send(data).await?;
+                    // }
 
                     self.client.send(data).await?;
 
@@ -430,6 +438,7 @@ struct SessionsResult {
     num_results: u64,
     num_finisheds: u64,
     traffic: Traffic,
+    lost: u64,
     stati: TaskStati,
     latencyh: Histogram,
     qps_h: Histogram,
@@ -468,11 +477,22 @@ impl SessionsResult {
             TaskEvent::Work(t) => {
                 self.work_range.update(t);
             }
-            TaskEvent::Packet(_t, size, d) => {
+            TaskEvent::Packet(_t, size, d, lost) => {
                 //self.packet_speed.inc_pub(Instant::now(), 1, size);
+                self.lost += lost;
                 self.traffic.inc(size as u64);
                 if let Some(r) = self.speed.check_float(Instant::now(), &self.traffic) {
-                    debug!("{}: [{:.2} q/s, {:.2} KB/s]", self.name, r.0, r.1,);
+                    let lost_str = if self.lost > 0 {
+                        let s = format!(", lost {}", self.lost);
+                        self.lost = 0;
+                        s
+                    } else {
+                        "".to_string()
+                    };
+                    debug!(
+                        "{}: [{:.2} q/s, {:.2} KB/s]{}",
+                        self.name, r.0, r.1, lost_str
+                    );
                 }
                 let _r = self.latencyh.increment(d * 1000_000);
             }
