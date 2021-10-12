@@ -796,7 +796,20 @@ impl PubsubBencher {
         } else {
             debug!("wait for connections down...");
             self.pubs.wait_for_finished().await?;
-            self.subs.wait_for_finished().await?;
+            //self.subs.wait_for_finished().await?;
+            let sub = self.subs.wait_for_finished();
+            tokio::pin!(sub);
+            tokio::select! {
+                r = &mut sub => {
+                    r?;
+                }
+
+                _r = tokio::signal::ctrl_c() => {
+                    warn!("got ctrl+c, send stop");
+                    let _r = self.req_tx.send(TaskReq::Stop);
+                    sub.await?;
+                }
+            }
         }
 
         debug!("<- all done");
