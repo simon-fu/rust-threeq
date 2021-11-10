@@ -3,9 +3,9 @@ use clap::Clap;
 use rust_threeq::tq3;
 use rust_threeq::tq3::app;
 
+mod kafka;
 mod pcap;
 mod pulsar;
-mod kafka;
 mod util;
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples

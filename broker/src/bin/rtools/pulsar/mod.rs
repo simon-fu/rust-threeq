@@ -1,9 +1,12 @@
-use crate::{pulsar::pulsar_util::TopicConsumerBuilder, util::{AMatchs, MatchClientId, RegexArg}};
+use crate::{
+    pulsar::pulsar_util::TopicConsumerBuilder,
+    util::{AMatchs, MatchClientId, RegexArg},
+};
 use anyhow::{bail, Context, Result};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Local, TimeZone};
 use clap::{Clap, ValueHint};
-use enumflags2::{BitFlags};
+use enumflags2::BitFlags;
 use futures::TryStreamExt;
 use log::{debug, info};
 use prost::Message;

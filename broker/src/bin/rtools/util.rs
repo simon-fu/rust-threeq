@@ -1,9 +1,12 @@
-use std::{fmt::Debug, time::{Duration, SystemTime}};
+use std::{
+    fmt::Debug,
+    time::{Duration, SystemTime},
+};
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use chrono::{DateTime, Local, TimeZone};
+use enumflags2::bitflags;
 use regex::Regex;
-use enumflags2::{bitflags};
 
 const ARG_TIME_FORMAT: &'static str = "%Y-%m-%dT%H:%M:%S";
 
@@ -29,7 +32,7 @@ impl std::str::FromStr for TimeArg {
             return Ok(Self(n));
         }
 
-        bail!("invalid time format [{}]", s);        
+        bail!("invalid time format [{}]", s);
     }
 }
 
@@ -38,7 +41,6 @@ impl Debug for TimeArg {
         f.debug_tuple("TimeArg").field(&self.format()).finish()
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct RegexArg(pub Regex);
@@ -72,7 +74,7 @@ macro_rules! define_match {
     ($id1:ident, $id2:expr) => {
         #[derive(Debug, Clone)]
         pub struct $id1(pub Regex);
-        
+
         impl AMatch for $id1 {
             #[inline]
             fn flag(&self) -> String {
@@ -83,7 +85,7 @@ macro_rules! define_match {
                 &self.0
             }
         }
-        
+
         impl std::str::FromStr for $id1 {
             type Err = anyhow::Error;
             fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -109,7 +111,7 @@ define_match!(MatchUser, "User");
 
 #[derive(Debug, Default)]
 pub struct MatchFlag {
-    flags: Vec<String>
+    flags: Vec<String>,
 }
 
 impl MatchFlag {
@@ -121,11 +123,7 @@ impl MatchFlag {
     //     &self.flags
     // }
 
-    pub fn match_text<A: AMatch>(
-        &mut self,
-        arg: &Option<A>,
-        text: &str,
-    ) {
+    pub fn match_text<A: AMatch>(&mut self, arg: &Option<A>, text: &str) {
         if let Some(m) = arg {
             if m.regex().is_match(text) {
                 self.flags.push(m.flag());
@@ -133,11 +131,7 @@ impl MatchFlag {
         }
     }
 
-    pub fn match_utf8<A: AMatch>(
-        &mut self,
-        arg: &Option<A>,
-        data: Vec<u8>,
-    ) {
+    pub fn match_utf8<A: AMatch>(&mut self, arg: &Option<A>, data: Vec<u8>) {
         if let Some(m) = arg {
             let r = String::from_utf8(data);
             if let Ok(text) = r {

@@ -1,14 +1,21 @@
-
-use std::{time::{Duration}};
+use anyhow::{bail, Result};
 use bytes::Buf;
-use clap::{Clap};
-use anyhow::{Result, bail};
+use clap::Clap;
 use log::info;
-use rdkafka::{ClientConfig, Message, consumer::{BaseConsumer, Consumer}, message::BorrowedMessage, util::Timeout};
-use rust_threeq::tq3::{tbytes::PacketDecoder, tt::{self, Protocol}};
+use rdkafka::{
+    consumer::{BaseConsumer, Consumer},
+    message::BorrowedMessage,
+    util::Timeout,
+    ClientConfig, Message,
+};
+use rust_threeq::tq3::{
+    tbytes::PacketDecoder,
+    tt::{self, Protocol},
+};
+use std::time::Duration;
 use tracing::{debug, error};
 
-use crate::util::{TimeArg, MatchTopic, MatchPayloadText, MatchFlag};
+use crate::util::{MatchFlag, MatchPayloadText, MatchTopic, TimeArg};
 
 #[derive(Clap, Debug, Clone)]
 pub struct ReadArgs {
@@ -18,7 +25,11 @@ pub struct ReadArgs {
     #[clap(long = "group", long_about = "kafka group", default_value = "rtools")]
     group: String,
 
-    #[clap(long = "addr", long_about = "kafka address", default_value = "127.0.0.1:9092")]
+    #[clap(
+        long = "addr",
+        long_about = "kafka address",
+        default_value = "127.0.0.1:9092"
+    )]
     addr: String,
 
     #[clap(
@@ -28,22 +39,26 @@ pub struct ReadArgs {
     )]
     begin: TimeArg,
 
-    #[clap(long = "num", long_about = "num of messages to read", default_value = "1")]
+    #[clap(
+        long = "num",
+        long_about = "num of messages to read",
+        default_value = "1"
+    )]
     num: u64,
 
     #[clap(long = "match-topic", long_about = "optional, regex match topic")]
     match_topic: Option<MatchTopic>,
 
-    #[clap(
-        long = "match-text",
-        long_about = "optional, regex match payload text"
-    )]
+    #[clap(long = "match-text", long_about = "optional, regex match payload text")]
     match_text: Option<MatchPayloadText>,
 
-    #[clap(long = "timeout", long_about = "timeout in seconds", default_value = "10")]
+    #[clap(
+        long = "timeout",
+        long_about = "timeout in seconds",
+        default_value = "10"
+    )]
     timeout_sec: u64,
 }
-
 
 fn print_metadata(brokers: &str, topic: Option<&str>, timeout: Duration, fetch_offsets: bool) {
     let consumer: BaseConsumer = ClientConfig::new()
@@ -105,7 +120,7 @@ fn print_metadata(brokers: &str, topic: Option<&str>, timeout: Duration, fetch_o
     }
 }
 
-fn print_msg(n: u64, borrowed_message: &BorrowedMessage, args: &ReadArgs) -> Result<()>{
+fn print_msg(n: u64, borrowed_message: &BorrowedMessage, args: &ReadArgs) -> Result<()> {
     let msg = borrowed_message.detach();
     // info!("msg {:?}", msg);
     let payload = msg.payload().unwrap();
@@ -115,12 +130,11 @@ fn print_msg(n: u64, borrowed_message: &BorrowedMessage, args: &ReadArgs) -> Res
         let r = msg.timestamp().to_millis();
         if let Some(n) = r {
             TimeArg(n as u64).format()
-
         } else {
             "None".into()
         }
     };
-    
+
     let mid = cursor.get_u64(); // MID:8/binary
     cursor.advance(10); // Expiry:10/binary
     let ver = cursor.get_u8(); // Version:1/binary
@@ -139,11 +153,13 @@ fn print_msg(n: u64, borrowed_message: &BorrowedMessage, args: &ReadArgs) -> Res
 
     let s = format!(
         "--- No.{}: time [{}], mid: [{:#018X}], topic [{}], ver {}, len {}, payload: [{}]",
-        n+1,
+        n + 1,
         ts,
         mid,
-        packet.topic, ver,
-        packet.payload.len(), payload,
+        packet.topic,
+        ver,
+        packet.payload.len(),
+        payload,
     );
 
     if !flag.is_empty() {
@@ -153,12 +169,11 @@ fn print_msg(n: u64, borrowed_message: &BorrowedMessage, args: &ReadArgs) -> Res
         debug!("{}", s);
         debug!("");
     }
-    
+
     Ok(())
 }
 
 pub async fn run_read(args: &ReadArgs) -> Result<()> {
-
     // let args = &ReadArgs {
     //     topic: "1PGUGY-JmlZla".into(),
     //     addr: "172.17.1.160:9092".into(),
@@ -171,28 +186,33 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
     // };
 
     let timeout = Duration::from_secs(args.timeout_sec);
-    
+
     info!("args: {:?}", args);
     info!("");
 
+    info!("fetching meta from {}...", args.addr);
     print_metadata(&args.addr, Some(&args.topic), timeout.clone(), true);
 
     // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
     let consumer: BaseConsumer = ClientConfig::new()
-    .set("group.id", &args.group)
-    .set("bootstrap.servers", &args.addr)
-    .set("enable.partition.eof", "false")
-    .set("session.timeout.ms", "6000")
-    .set("enable.auto.commit", "false")
-    .set("auto.offset.reset", "earliest")
-    .create()?;
+        .set("group.id", &args.group)
+        .set("bootstrap.servers", &args.addr)
+        .set("enable.partition.eof", "false")
+        .set("session.timeout.ms", "6000")
+        .set("enable.auto.commit", "false")
+        .set("auto.offset.reset", "earliest")
+        .create()?;
 
     let _r = consumer.subscribe(&[&args.topic])?;
     info!("subscribed topic {}", args.topic);
 
     info!("subscription {:?}", consumer.subscription()?);
     for ele in consumer.subscription()?.elements() {
-        info!("  ele partition {}, offset {:?}", ele.partition(), ele.offset());
+        info!(
+            "  ele partition {}, offset {:?}",
+            ele.partition(),
+            ele.offset()
+        );
     }
 
     info!("position {:?}", consumer.position()?);
@@ -204,22 +224,35 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
             let _msg = r?;
             // print_msg(&_msg)?;
         } else {
-            info!("assignment timeout with count {}", consumer.assignment()?.count());
+            info!(
+                "assignment timeout with count {}",
+                consumer.assignment()?.count()
+            );
             bail!("assignment timeout");
         }
     }
     info!("assignment completed, {:?}", consumer.assignment()?);
 
-    let tpl = consumer.offsets_for_timestamp(args.begin.0 as i64, Timeout::After(timeout.clone()))?;
+    let tpl =
+        consumer.offsets_for_timestamp(args.begin.0 as i64, Timeout::After(timeout.clone()))?;
     info!("offsets_for_timestamp {:?}", tpl);
 
     for ele in &tpl.elements_for_topic(&args.topic) {
         if ele.offset().to_raw().is_some() {
-            info!("  seek partition {}, offset {:?}", ele.partition(), ele.offset());
-            let _r = consumer.seek(&args.topic, ele.partition(), ele.offset(), Timeout::After(timeout.clone()))?; 
+            info!(
+                "  seek partition {}, offset {:?}",
+                ele.partition(),
+                ele.offset()
+            );
+            let _r = consumer.seek(
+                &args.topic,
+                ele.partition(),
+                ele.offset(),
+                Timeout::After(timeout.clone()),
+            )?;
         }
     }
-    
+
     info!("");
     let mut n = 0;
     while n < args.num {
@@ -233,6 +266,6 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
             break;
         }
     }
-    
+
     Ok(())
 }
