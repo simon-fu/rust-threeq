@@ -1,14 +1,13 @@
-use crate::pulsar::pulsar_util::TopicConsumerBuilder;
+use crate::{pulsar::pulsar_util::TopicConsumerBuilder, util::{AMatchs, MatchClientId, RegexArg}};
 use anyhow::{bail, Context, Result};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Local, TimeZone};
 use clap::{Clap, ValueHint};
-use enumflags2::{bitflags, BitFlags};
+use enumflags2::{BitFlags};
 use futures::TryStreamExt;
 use log::{debug, info};
 use prost::Message;
 use pulsar::{proto::MessageIdData, DeserializeMessage, Payload, Pulsar, TokioExecutor};
-use regex::Regex;
 use rust_threeq::{
     here,
     tq3::{tbytes::PacketDecoder, tt},
@@ -63,7 +62,7 @@ pub struct ReadArgs {
         long = "match-clientid",
         long_about = "optional, regex match client id"
     )]
-    match_clientid: Option<RegexArg>,
+    match_clientid: Option<MatchClientId>,
 
     #[clap(long = "match-user", long_about = "optional, regex match user name")]
     match_user: Option<RegexArg>,
@@ -109,16 +108,6 @@ impl std::str::FromStr for TimeArg {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let t = Local.datetime_from_str(s, ARG_TIME_FORMAT)?;
         Ok(Self(t.timestamp_millis() as u64))
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RegexArg(Regex);
-
-impl std::str::FromStr for RegexArg {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(Regex::new(s)?))
     }
 }
 
@@ -435,18 +424,6 @@ fn parse_mqtt_packet<P: PacketDecoder>(ver: u8, packet: &Vec<u8>) -> Result<P> {
     }
     let mut buf = &packet[..];
     P::decode(protocol, &h, &mut buf)
-}
-
-#[bitflags]
-#[repr(u8)]
-#[derive(Copy, Clone, Debug, PartialEq)]
-enum AMatchs {
-    ClientId = 0b000001,
-    MsgId = 0b000010,
-    PayloadText = 0b000100,
-    ConnId = 0b001000,
-    Topic = 0b010000,
-    User = 0b100000,
 }
 
 #[inline]
