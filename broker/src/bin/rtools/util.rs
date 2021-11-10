@@ -102,10 +102,10 @@ macro_rules! define_match {
 
 define_match!(MatchClientId, "ClientId");
 define_match!(MatchMsgId, "MsgId");
-define_match!(MatchPayloadText, "AMatchs::PayloadText");
-define_match!(MatchConnId, "AMatchs::ConnId");
-define_match!(MatchTopic, "AMatchs::Topic");
-define_match!(MatchUser, "AMatchs::User");
+define_match!(MatchPayloadText, "PayloadText");
+define_match!(MatchConnId, "ConnId");
+define_match!(MatchTopic, "Topic");
+define_match!(MatchUser, "User");
 
 #[derive(Debug, Default)]
 pub struct MatchFlag {
@@ -113,6 +113,14 @@ pub struct MatchFlag {
 }
 
 impl MatchFlag {
+    pub fn is_empty(&self) -> bool {
+        self.flags.is_empty()
+    }
+
+    // pub fn flags(&self) -> &Vec<String> {
+    //     &self.flags
+    // }
+
     pub fn match_text<A: AMatch>(
         &mut self,
         arg: &Option<A>,

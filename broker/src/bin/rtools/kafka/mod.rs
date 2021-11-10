@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use log::info;
 use rdkafka::{ClientConfig, Message, consumer::{BaseConsumer, Consumer}, message::BorrowedMessage, util::Timeout};
 use rust_threeq::tq3::{tbytes::PacketDecoder, tt::{self, Protocol}};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::util::{TimeArg, MatchTopic, MatchPayloadText, MatchFlag};
 
@@ -138,17 +138,22 @@ fn print_msg(n: u64, borrowed_message: &BorrowedMessage, args: &ReadArgs) -> Res
     flag.match_utf8(&args.match_text, packet.payload.to_vec());
 
     let s = format!(
-        "--- No.{}: time [{}], mid: [{:#016X}], topic [{}], ver {}, len {}, payload: [{}]",
+        "--- No.{}: time [{}], mid: [{:#018X}], topic [{}], ver {}, len {}, payload: [{}]",
         n+1,
         ts,
         mid,
         packet.topic, ver,
-        packet.payload.len(), payload
+        packet.payload.len(), payload,
     );
 
-    info!("{}", s);
-    info!("");
-
+    if !flag.is_empty() {
+        info!("{}", s);
+        info!("");
+    } else {
+        debug!("{}", s);
+        debug!("");
+    }
+    
     Ok(())
 }
 
