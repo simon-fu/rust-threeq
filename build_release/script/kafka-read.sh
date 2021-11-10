@@ -1,4 +1,5 @@
 
+export RUST_LOG="debug"
 KAFKA_ADDR="192.168.147.50:9092"
 MQTT_TOPIC="qevbf0-Jmlcqhudqlonrhshnm"
 BEGIN_TIME="2021-11-08T18:41:50"
