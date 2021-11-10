@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use bytes::Buf;
 use clap::Clap;
 use log::info;
@@ -60,15 +60,20 @@ pub struct ReadArgs {
     timeout_sec: u64,
 }
 
-fn print_metadata(brokers: &str, topic: Option<&str>, timeout: Duration, fetch_offsets: bool) {
+fn print_metadata(
+    brokers: &str,
+    topic: Option<&str>,
+    timeout: Duration,
+    fetch_offsets: bool,
+) -> Result<()> {
     let consumer: BaseConsumer = ClientConfig::new()
         .set("bootstrap.servers", brokers)
         .create()
-        .expect("Consumer creation failed");
+        .with_context(|| "Consumer creation failed")?;
 
     let metadata = consumer
         .fetch_metadata(topic, timeout.clone())
-        .expect("Failed to fetch metadata");
+        .with_context(|| "Failed to fetch metadata")?;
 
     let mut message_count = 0;
 
@@ -118,6 +123,7 @@ fn print_metadata(brokers: &str, topic: Option<&str>, timeout: Duration, fetch_o
             info!("     Total message count: {}", message_count);
         }
     }
+    Ok(())
 }
 
 fn print_msg(n: u64, borrowed_message: &BorrowedMessage, args: &ReadArgs) -> Result<()> {
@@ -191,7 +197,7 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
     info!("");
 
     info!("fetching meta from {}...", args.addr);
-    print_metadata(&args.addr, Some(&args.topic), timeout.clone(), true);
+    print_metadata(&args.addr, Some(&args.topic), timeout.clone(), true)?;
 
     // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
     let consumer: BaseConsumer = ClientConfig::new()
