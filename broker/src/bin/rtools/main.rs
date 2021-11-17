@@ -4,6 +4,7 @@ use rust_threeq::tq3;
 use rust_threeq::tq3::app;
 
 mod kafka;
+mod mqtt;
 mod pcap;
 mod pulsar;
 mod util;
@@ -21,6 +22,7 @@ enum SubCmd {
     PulsarRead(pulsar::ReadArgs),
     KafkaRead(kafka::ReadArgs),
     MqttPcap(pcap::ReadMqttPcapArgs),
+    MqttSub(mqtt::SubArgs),
 }
 
 #[tokio::main]
@@ -36,6 +38,7 @@ async fn main() -> Result<()> {
         SubCmd::PulsarRead(opts) => pulsar::run_read(&opts).await?,
         SubCmd::KafkaRead(opts) => kafka::run_read(&opts).await?,
         SubCmd::MqttPcap(opts) => pcap::run_read_mqtt_pcap_file(&opts).await?,
+        SubCmd::MqttSub(opts) => mqtt::run_sub(&opts).await?,
     }
 
     Ok(())
