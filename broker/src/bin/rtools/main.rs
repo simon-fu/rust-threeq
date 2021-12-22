@@ -8,6 +8,7 @@ mod mqtt;
 mod pcap;
 mod pulsar;
 mod util;
+mod token;
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
 #[derive(Clap, Debug)]
@@ -23,6 +24,7 @@ enum SubCmd {
     KafkaRead(kafka::ReadArgs),
     MqttPcap(pcap::ReadMqttPcapArgs),
     MqttSub(mqtt::SubArgs),
+    Token(token::SubArgs),
 }
 
 #[tokio::main]
@@ -39,6 +41,7 @@ async fn main() -> Result<()> {
         SubCmd::KafkaRead(opts) => kafka::run_read(&opts).await?,
         SubCmd::MqttPcap(opts) => pcap::run_read_mqtt_pcap_file(&opts).await?,
         SubCmd::MqttSub(opts) => mqtt::run_sub(&opts).await?,
+        SubCmd::Token(opts) => token::run_sub(&opts).await?,
     }
 
     Ok(())

@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use bytes::{Buf, BytesMut};
 use clap::{Clap, ValueHint};
+use libpcap_analyzer::TransportLayerType;
 use log::{debug, info};
 
 use async_trait::async_trait;
@@ -359,6 +360,15 @@ use libpcap_analyzer::{Plugin, PluginResult, PLUGIN_FLOW_DEL, PLUGIN_FLOW_NEW, P
 use libpcap_tools::pcap_parser::nom::HexDisplay;
 use libpcap_tools::{Flow, Packet};
 
+fn l4_type_name(l4_type: u16) -> &'static str {
+    match l4_type {
+        x if x == TransportLayerType::Tcp as u16 => "Tcp",
+        x if x == TransportLayerType::Udp as u16 => "Udp",
+        x if x == TransportLayerType::Icmp as u16 => "Icmp",
+        _ => "Unknown",
+    }
+}
+
 #[derive(Default)]
 pub struct MqttDump;
 default_plugin_builder!(MqttDump, MqttDumpBuilder);
@@ -391,7 +401,7 @@ impl Plugin for MqttDump {
         debug!("    to_server: {}", pinfo.to_server);
         debug!("    l3_type: 0x{:x}", pinfo.l3_type);
         debug!("    l4_data_len: {}", pinfo.l4_data.len());
-        debug!("    l4_type: {}", pinfo.l4_type);
+        debug!("    l4_type: {} ({})", pinfo.l4_type, l4_type_name(pinfo.l4_type as u16));
         debug!(
             "    l4_payload_len: {}",
             pinfo.l4_payload.map_or(0, |d| d.len())
@@ -410,6 +420,12 @@ impl Plugin for MqttDump {
         if let Some(d) = pinfo.l4_payload {
             debug!("    l4_payload:\n{}", d.to_hex(16));
         }
+
+
+        if pinfo.l4_type == TransportLayerType::Tcp as u16 as u8 {
+
+        }
+        
         PluginResult::None
     }
 }

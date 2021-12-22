@@ -49,6 +49,9 @@ impl PubAck {
             let properties_len = properties.len();
             let properties_len_len = len_len(properties_len);
             len += properties_len_len + properties_len;
+        } else {
+            // compatible with  https://github.com/novastone-media/MQTT-Client-Framework/tree/0.15.3
+            len += 1;
         }
 
         len
@@ -112,6 +115,9 @@ impl PubAck {
         buffer.put_u8(self.reason as u8);
         if let Some(properties) = &self.properties {
             properties.write(buffer)?;
+        } else {
+            // compatible with  https://github.com/novastone-media/MQTT-Client-Framework/tree/0.15.3
+            buffer.put_u8(0);
         }
 
         Ok(1 + count + len)
