@@ -197,7 +197,7 @@ impl AgentDebug for msg::DownlinkMessage {
         f.debug_struct("DownlinkMessage")
             .field("header", &self.header)
             .field("code", &self.code)
-            .field("size", &self.size)
+            // .field("size", &self.size) // aaa
             .finish()
     }
 }

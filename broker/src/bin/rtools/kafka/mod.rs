@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use bytes::Buf;
 use clap::Clap;
 use log::info;
+
 use rdkafka::{
     consumer::{BaseConsumer, Consumer},
     message::BorrowedMessage,
@@ -126,55 +127,86 @@ fn print_metadata(
     Ok(())
 }
 
+mod msg {
+    include!(concat!(env!("OUT_DIR"), "/mqtt.data.rs"));
+}
+
 fn print_msg(n: u64, borrowed_message: &BorrowedMessage, args: &ReadArgs) -> Result<()> {
     let msg = borrowed_message.detach();
     // info!("msg {:?}", msg);
     let payload = msg.payload().unwrap();
     let mut cursor = payload;
 
-    let ts = {
-        let r = msg.timestamp().to_millis();
-        if let Some(n) = r {
-            TimeArg(n as u64).format()
-        } else {
-            "None".into()
-        }
-    };
+    let ver = cursor.get_u8();
+    cursor.advance(2);
+    let ptype = cursor.get_u8();
+    
 
-    let mid = cursor.get_u64(); // MID:8/binary
-    cursor.advance(10); // Expiry:10/binary
-    let ver = cursor.get_u8(); // Version:1/binary
-    let fixed_header = tt::check(cursor.iter(), 65536)?;
-    let packet = tt::Publish::decode(Protocol::from_u8(ver)?, &fixed_header, &mut cursor)?;
-    let payload = {
-        let r = String::from_utf8(packet.payload.to_vec());
-        match r {
-            Ok(s) => s,
-            Err(_) => "".into(),
-        }
-    };
-    let mut flag = MatchFlag::default();
-    flag.match_text(&args.match_topic, &packet.topic);
-    flag.match_utf8(&args.match_text, packet.payload.to_vec());
-
-    let s = format!(
-        "--- No.{}: time [{}], mid: [{:#018X}], topic [{}], ver {}, len {}, payload: [{}]",
-        n + 1,
-        ts,
-        mid,
-        packet.topic,
-        ver,
-        packet.payload.len(),
-        payload,
-    );
-
-    if !flag.is_empty() {
-        info!("{}", s);
-        info!("");
-    } else {
-        debug!("{}", s);
-        debug!("");
+    let ptype = msg::Events::from_i32(ptype as i32).with_context(||"decode event type fail")?;
+    info!("-- No.{}: ver {}, ptype {:?}", n+1, ver, ptype);
+    match ptype {
+        msg::Events::Uplink => {
+            let m = <msg::UplinkMessage as prost::Message>::decode(cursor)?;
+            if let Some(header) = &m.header {
+                info!("  msgid: {:016X?}", header.msgid());
+                info!("  detail: {:?}", m);  
+            }
+        },
+        msg::Events::Downlink => {},
+        msg::Events::Subscription => {},
+        msg::Events::Unsubscription => {},
+        msg::Events::Connection => {},
+        msg::Events::Disconnection => {},
+        msg::Events::Close => {},
+        msg::Events::Malformed => {},
     }
+
+    
+
+
+    // let ts = {
+    //     let r = msg.timestamp().to_millis();
+    //     if let Some(n) = r {
+    //         TimeArg(n as u64).format()
+    //     } else {
+    //         "None".into()
+    //     }
+    // };
+
+    // let mid = cursor.get_u64(); // MID:8/binary
+    // cursor.advance(10); // Expiry:10/binary
+    // let ver = cursor.get_u8(); // Version:1/binary
+    // let fixed_header = tt::check(cursor.iter(), 65536)?;
+    // let packet = tt::Publish::decode(Protocol::from_u8(ver)?, &fixed_header, &mut cursor)?;
+    // let payload = {
+    //     let r = String::from_utf8(packet.payload.to_vec());
+    //     match r {
+    //         Ok(s) => s,
+    //         Err(_) => "".into(),
+    //     }
+    // };
+    // let mut flag = MatchFlag::default();
+    // flag.match_text(&args.match_topic, &packet.topic);
+    // flag.match_utf8(&args.match_text, packet.payload.to_vec());
+
+    // let s = format!(
+    //     "--- No.{}: time [{}], mid: [{:#018X}], topic [{}], ver {}, len {}, payload: [{}]",
+    //     n + 1,
+    //     ts,
+    //     mid,
+    //     packet.topic,
+    //     ver,
+    //     packet.payload.len(),
+    //     payload,
+    // );
+
+    // if !flag.is_empty() {
+    //     info!("{}", s);
+    //     info!("");
+    // } else {
+    //     debug!("{}", s);
+    //     debug!("");
+    // }
 
     Ok(())
 }

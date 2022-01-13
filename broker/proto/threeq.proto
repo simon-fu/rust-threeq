@@ -24,6 +24,7 @@ option optimize_for = LITE_RUNTIME;
 enum Events {
     UPLINK = 0;
     DOWNLINK = 1;
+    // DOWNLINK_METRICS = 2;
     SUBSCRIPTION = 2;
     UNSUBSCRIPTION = 3;
     CONNECTION = 4;
@@ -38,22 +39,32 @@ message ControlHeaderInfo {
     optional string user = 2;
     optional uint64 msgid = 3;
     uint64 connid = 4;
+    uint64 timestamp = 7;
 }
 
 // type 0
 message UplinkMessage {
     ControlHeaderInfo header = 1;
-    bytes packet = 2;
+    bytes packet = 2;   
     string code = 3;
 }
 
 // type 1
+// packet : <<_:4/bits, DUP:1/bits, QoS:2/bits, Retain:1/bits, ID(optional):16/bits, Props(optional)/binary>>.
 message DownlinkMessage {
     ControlHeaderInfo header = 1;
-    bytes packet = 2;
-    uint32 size = 3;
-    string code = 4;
+    bytes packet = 2;   // qos, ID, dup, retain, props
+    string code = 5;
 }
+
+// type -
+// message DownlinkMessageMetrics {
+//     ControlHeaderInfo header = 1;
+//     uint32 qos = 2; 
+//     uint32 size = 3;
+//     uint32 count = 4;
+//     string code = 5;
+// }
 
 // type 2
 message Subscription {
@@ -61,7 +72,10 @@ message Subscription {
     uint32 count = 2;
     bytes packet = 3;
     map<string, string> codes = 4;      // topicfilter => code
-    string node = 5;
+    uint32 version = 5;
+    uint32 keepalive = 6;
+    string node = 8;
+    string node_id = 9;
 }
 
 // type 3
@@ -71,6 +85,7 @@ message UnSubscription {
     bytes packet = 3;
     map<string, string> codes = 4;      // topicfilter => code
     string node = 5;
+    string node_id = 6;
 }
 
 // type 4
@@ -81,7 +96,8 @@ message Connection {
     bytes packet = 4;
     string network = 5;
     string ip = 6;
-    string node = 7;
+    string node = 8;
+    string node_id = 9;
 }
 
 // type 5
@@ -89,6 +105,8 @@ message Disconnection {
     ControlHeaderInfo header = 1;
     string code = 2;
     bytes packet = 3;
+    string node = 4;
+    string node_id = 5;
 }
 
 // type 6
@@ -97,6 +115,7 @@ message SessionClose {
     uint32 oss = 2;
     string code = 3;
     string node = 4;
+    string node_id = 5;
 }
 
 // type 7
@@ -104,5 +123,5 @@ message MalformedPackage {
     ControlHeaderInfo header = 1;
     bytes packet = 2;
     string code = 3;
+    string node = 4;
 }
-
