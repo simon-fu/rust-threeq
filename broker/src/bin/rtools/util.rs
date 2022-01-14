@@ -111,7 +111,7 @@ define_match!(MatchUser, "User");
 
 #[derive(Debug, Default)]
 pub struct MatchFlag {
-    flags: Vec<String>,
+    pub flags: Vec<String>,
 }
 
 impl MatchFlag {

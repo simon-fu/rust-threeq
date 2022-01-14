@@ -31,8 +31,8 @@ enum SubCmd {
 async fn main() -> Result<()> {
     // RUST_LOG=hyper=warn,reqwest=warn,debug cargo run --release --bin rtools -- pulsar-read  --topic persistent://easemob/default/ev0
     // tracing_subscriber::fmt::init();
-    tq3::log::tracing_subscriber::init();
-    // tq3::log::tracing_subscriber::init_with_filters("pulsar=warn,hyper=warn,reqwest=warn");
+    // tq3::log::tracing_subscriber::init();
+    tq3::log::tracing_subscriber::init_with_filters("debug,pulsar=warn,hyper=warn,reqwest=warn");
 
     let args = CmdArgs::parse();
 
