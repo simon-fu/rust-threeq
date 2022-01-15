@@ -13,7 +13,8 @@ use rust_threeq::tq3::{
     tbytes::PacketDecoder,
     tt::{self, Protocol},
 };
-use std::{time::Duration};
+use serde::{Serialize, Deserialize};
+use std::{time::Duration, collections::HashMap};
 use tracing::{debug, error};
 
 use crate::util::{MatchFlag, MatchPayloadText, MatchTopic, TimeArg};
@@ -178,11 +179,72 @@ mod msg {
 //     }
 // }
 
-#[derive(Debug, Clone, Default)]
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct Stat {
     num_uplinks: u64,
-    // apps: HashMap<String, AppStat>
+    apps: HashMap<String, StatMsg>
 }
+
+impl Stat {
+    fn add_app_delta(&mut self, delta: StatMsg) -> Result<()> {
+        let app = self.apps.entry(delta.appid).or_insert_with(||StatMsg::default());
+        merge_stat_delta(&mut app.dl_bytes, delta.dl_bytes);
+        merge_stat_delta(&mut app.dl_bytes_theory, delta.dl_bytes_theory);
+        merge_stat_delta(&mut app.dl_count, delta.dl_count);
+        merge_stat_delta(&mut app.dl_count_theory, delta.dl_count_theory);
+        merge_stat_delta(&mut app.ul_bytes, delta.ul_bytes);
+        merge_stat_delta(&mut app.ul_count, delta.ul_count);
+        Ok(())
+    }
+}
+
+fn merge_stat_delta(total: &mut Option<HashMap<String, u64>>, delta: Option<HashMap<String, u64>>,) {
+    if let Some(delta) = delta {
+        let total = match total {
+            Some(total) => total,
+            None => {
+                *total = Some(Default::default());
+                total.as_mut().unwrap()
+            },
+        };
+        
+        for (k, v) in delta {
+            let entry = total.entry(k).or_insert_with(||0);
+            *entry += v;
+        }
+    }
+    
+}
+
+/*
+        {
+            "ul_count":{"2":3,"1":3,"0":3},
+            "ul_bytes":{"2":3162,"1":3162,"0":3156},
+            "dl_count_theory":{"0":3},
+            "dl_count":{"2":1,"1":3,"0":5},
+            "dl_bytes_theory":{"0":3156},
+            "dl_bytes":{"2":1054,"1":3162,"0":5260},
+            "appid":"1PGUGY"
+        }
+    */
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+struct StatMsg {
+    appid: String,
+    #[serde(skip_serializing_if="Option::is_none")]
+    dl_bytes: Option<HashMap<String, u64>>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    dl_bytes_theory: Option<HashMap<String, u64>>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    dl_count: Option<HashMap<String, u64>>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    dl_count_theory: Option<HashMap<String, u64>>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    ul_bytes: Option<HashMap<String, u64>>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    ul_count: Option<HashMap<String, u64>>,
+}
+
 
 
 struct ParsedHeader {
@@ -214,10 +276,11 @@ struct ParsedMessage {
 }
 
 
-fn process_msg(n: u64, msg: &BorrowedMessage, args: &ReadArgs, stat: &mut Stat) -> Result<()> {
+fn process_ulink_msg(n: u64, msg: &BorrowedMessage, args: &ReadArgs, stat: &mut Stat) -> Result<()> {
     // let msg = borrowed_message.detach();
     // info!("msg {:?}", msg);
-    let payload = msg.payload().unwrap();
+    // let payload = msg.payload().unwrap();
+    let payload = msg.payload().with_context(||format!("No.{} empty payload", n))?;
     let mut cursor = payload;
 
     let ver = cursor.get_u8();
@@ -281,107 +344,21 @@ fn process_msg(n: u64, msg: &BorrowedMessage, args: &ReadArgs, stat: &mut Stat) 
     }
     
 
+    Ok(())
+}
 
+fn process_stat_msg(n: u64, msg: &BorrowedMessage, _args: &ReadArgs, stat: &mut Stat) -> Result<()> {
+    let payload = msg.payload().with_context(||format!("No.{} empty payload", n))?;
 
-
-    // let mid = cursor.get_u64(); // MID:8/binary
-    // cursor.advance(10); // Expiry:10/binary
-    // let ver = cursor.get_u8(); // Version:1/binary
-    // let fixed_header = tt::check(cursor.iter(), 65536)?;
-    // let packet = tt::Publish::decode(Protocol::from_u8(ver)?, &fixed_header, &mut cursor)?;
-    // let payload = {
-    //     let r = String::from_utf8(packet.payload.to_vec());
-    //     match r {
-    //         Ok(s) => s,
-    //         Err(_) => "".into(),
-    //     }
-    // };
-    // let mut flag = MatchFlag::default();
-    // flag.match_text(&args.match_topic, &packet.topic);
-    // flag.match_utf8(&args.match_text, packet.payload.to_vec());
-
-    // let s = format!(
-    //     "--- No.{}: time [{}], mid: [{:#018X}], topic [{}], ver {}, len {}, payload: [{}]",
-    //     n + 1,
-    //     ts,
-    //     mid,
-    //     packet.topic,
-    //     ver,
-    //     packet.payload.len(),
-    //     payload,
-    // );
-
-    // if !flag.is_empty() {
-    //     info!("{}", s);
-    //     info!("");
-    // } else {
-    //     debug!("{}", s);
-    //     debug!("");
-    // }
+    let s = std::str::from_utf8(payload)?;
+    debug!("-- No.{}: [{}]", n, s);
+    
+    let msg: StatMsg = serde_json::from_slice(payload).with_context(||"parse stat msg fail")?;
+    stat.add_app_delta(msg)?;
 
     Ok(())
 }
 
-// trait EndChecker {
-//     fn check(&self, n: u64, msg: &BorrowedMessage)-> Option<String>;
-// }
-
-// struct NumEndChecker {
-//     num: u64
-// }
-
-// impl EndChecker for NumEndChecker {
-//     #[inline]
-//     fn check(&self, n: u64, _msg: &BorrowedMessage)-> Option<String> {
-//         if (n+1) > self.num {
-//             Some(format!("{} >= {}", n, self.num))
-//         } else {
-//             None
-//         }
-//     }
-// }
-
-// struct MilliEndChecker {
-//     milli: u64
-// }
-
-// impl EndChecker for MilliEndChecker {
-//     #[inline]
-//     fn check(&self, _n: u64, msg: &BorrowedMessage)-> Option<String> {
-
-//         if let Some(milli) = msg.timestamp().to_millis() {
-//             let milli = milli as u64;
-//             if milli >= self.milli {
-//                 return Some(format!("{} >= {}", format_milli(milli), format_milli(self.milli)));
-//             } 
-//         } 
-//         None
-
-//     }
-// }
-
-
-// fn read_loop<C: EndChecker>(consumer: &BaseConsumer, args: &ReadArgs, timeout: &Duration, end_checker: C) -> Result<()> {
-//     let mut stat = Stat::default();
-//     let mut n = 0;
-//     loop {
-//         let r = consumer.poll(Timeout::After(timeout.clone()));
-//         if let Some(r) = r {
-//             let borrowed_message = r?;
-//             if let Some(reason) = end_checker.check(n, &borrowed_message) {
-//                 info!("reach end: [{}]", reason);
-//                 break;
-//             }
-//             process_msg(n+1, &borrowed_message, args, &mut stat)?;
-//             n += 1;
-//         } else {
-//             error!("read timeout");
-//             break;
-//         }
-//     }
-
-//     Ok(())
-// }
 
 pub async fn run_read(args: &ReadArgs) -> Result<()> {
     // let args = &ReadArgs {
@@ -501,7 +478,9 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
                 }
             }
 
-            process_msg(n+1, &borrowed_message, args, &mut stat)?;
+            // process_ulink_msg(n+1, &borrowed_message, args, &mut stat)?;
+            process_stat_msg(n+1, &borrowed_message, args, &mut stat)?;
+            
             n += 1;
         } else {
             error!("read timeout");
@@ -509,5 +488,8 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
         }
     }
 
+    let s = serde_json::to_string_pretty(&stat)?;
+    info!("--- app stats ---", );
+    info!("{}", s);
     Ok(())
 }
