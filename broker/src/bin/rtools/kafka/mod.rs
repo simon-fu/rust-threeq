@@ -574,13 +574,6 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
                 continue;
             }
 
-            // if let Some(end) = &args.end {
-            //     if milli >= end.0 {
-            //         info!("reach end: [{} >= {}]", format_milli(milli), format_milli(end.0));
-            //         break;
-            //     }
-            // }
-
             if let Some(end) = &mut end_pos {
                 if let Some(pos) = end.update_by_msg(&borrowed_message)? {
                     info!("update reach end: partition {}, offset {:?}, end {}", borrowed_message.partition(), borrowed_message.offset(), pos);
@@ -589,6 +582,15 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
                 if end.is_all_end() {
                     info!("reach all partition end");
                     break;
+                }
+            }
+
+            if let Some(end) = &args.end {
+                if milli >= end.0 {
+                    // info!("reach end: [{} >= {}]", format_milli(milli), format_milli(end.0));
+                    // break;
+                    info!("skip end: parti [{}], [{} >= {}]", borrowed_message.partition(), format_milli(milli), format_milli(end.0));
+                    continue;
                 }
             }
 
