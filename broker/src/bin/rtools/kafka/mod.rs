@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bytes::Buf;
 use clap::Clap;
 use log::info;
@@ -7,7 +7,7 @@ use rdkafka::{
     consumer::{BaseConsumer, Consumer},
     message::BorrowedMessage,
     util::Timeout,
-    ClientConfig, Message,
+    ClientConfig, Message, Offset, topic_partition_list::TopicPartitionListElem,
 };
 use rust_threeq::tq3::{
     tbytes::PacketDecoder,
@@ -350,8 +350,17 @@ fn process_ulink_msg(n: u64, msg: &BorrowedMessage, args: &ReadArgs, stat: &mut 
 fn process_stat_msg(n: u64, msg: &BorrowedMessage, _args: &ReadArgs, stat: &mut Stat) -> Result<()> {
     let payload = msg.payload().with_context(||format!("No.{} empty payload", n))?;
 
+    let ts = {
+        let r = msg.timestamp().to_millis();
+        if let Some(n) = r {
+            format_milli(n as u64)
+        } else {
+            "None".into()
+        }
+    };
     let s = std::str::from_utf8(payload)?;
-    debug!("-- No.{}: [{}]", n, s);
+    debug!("-- No.{}: ts [{}], parti [{}], offset [{}]", n, ts, msg.partition(), msg.offset());
+    debug!("-- data: [{}]", s);
     
     let msg: StatMsg = serde_json::from_slice(payload).with_context(||"parse stat msg fail")?;
     stat.add_app_delta(msg)?;
@@ -359,6 +368,77 @@ fn process_stat_msg(n: u64, msg: &BorrowedMessage, _args: &ReadArgs, stat: &mut 
     Ok(())
 }
 
+// struct EndItem {
+//     end_offset: i64,
+//     is_reach_end: bool,
+// }
+
+// impl EndItem {
+//     fn update(&mut self, offset: i64) -> bool {
+//         if offset >= self.end_offset {
+//             if !self.is_reach_end {
+//                 self.is_reach_end = true;
+//                 return true;
+//             }
+//         }
+//         false
+//     }
+// }
+
+struct EndPos {
+    // partition -> (offset, is_reach_end)
+    positions: HashMap<i32, (i64, bool)>, 
+    num_ends: usize,
+}
+
+impl EndPos {
+    fn new<'a>(list: &Vec<TopicPartitionListElem<'a>>) -> Result<Self> {
+        let mut positions = HashMap::new();
+        let mut num_ends = 0;
+        for ele in list {
+            let v = match ele.offset() {
+                Offset::Offset(n) => (n, false),
+                Offset::End => (i64::MAX, false),
+                _ => bail!("unsupported init offset {:?}", ele.offset()),
+            };
+            if v.1 {
+                num_ends += 1;
+            }
+            positions.insert(ele.partition(), v);
+        }
+        Ok(Self{positions, num_ends})
+    }
+
+    fn update_by_msg(&mut self, msg: &BorrowedMessage) -> Result<Option<i64>> {
+        self.update(msg.partition(), msg.offset())
+    }
+
+    fn update_by_offset(&mut self, partition: i32, offset: Offset) -> Result<Option<i64>> {
+        match offset {
+            Offset::Offset(n) => self.update(partition, n),
+            Offset::End => self.update(partition, i64::MAX),
+            _ => bail!("unsupported update offset {:?}", offset),
+        }
+    }
+
+    fn update(&mut self, partition: i32, offset: i64) -> Result<Option<i64>> {
+        if let Some(pos) = self.positions.get_mut(&partition) {
+            if offset >= pos.0 {
+                if !pos.1 {
+                    pos.1 = true;
+                    self.num_ends += 1;
+                    return Ok(Some(pos.0));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    #[inline]
+    fn is_all_end(&self) -> bool {
+        self.num_ends >= self.positions.len()
+    }
+}
 
 pub async fn run_read(args: &ReadArgs) -> Result<()> {
     // let args = &ReadArgs {
@@ -398,7 +478,7 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
         info!(
             "  ele partition {}, offset {:?}",
             ele.partition(),
-            ele.offset()
+            ele.offset(),
         );
     }
 
@@ -422,14 +502,32 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
     }
     info!("partition assignment completed, {:?}", consumer.assignment()?);
 
+    let mut end_pos = if let Some(end) = &args.end {
+        let tpl =
+        consumer.offsets_for_timestamp(end.0 as i64, Timeout::After(timeout.clone()))?;
+        info!("offsets_for_timestamp {:?}, end {}-{:?}", tpl, end.0, end);
+        let list = tpl.elements_for_topic(&args.topic);
+        for ele in &list {
+            if ele.offset().to_raw().is_some() {
+                info!(
+                    "  end pos: partition {}, offset {:?}",
+                    ele.partition(), ele.offset(), 
+                );
+            }
+        }
+        Some(EndPos::new(&list)?)
+    } else {
+        None
+    };
+
     let tpl =
         consumer.offsets_for_timestamp(args.begin.0 as i64, Timeout::After(timeout.clone()))?;
-    info!("offsets_for_timestamp {:?}, begin {}", tpl, args.begin.0);
+    info!("offsets_for_timestamp {:?}, begin {}-{:?}", tpl, args.begin.0, args.begin);
 
     for ele in &tpl.elements_for_topic(&args.topic) {
         if ele.offset().to_raw().is_some() {
             info!(
-                "  seek partition {}, offset {:?}",
+                "  seek begin, partition {}, offset {:?}",
                 ele.partition(),
                 ele.offset()
             );
@@ -439,6 +537,11 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
                 ele.offset(),
                 Timeout::After(timeout.clone()),
             )?;
+            if let Some(end) = &mut end_pos {
+                if let Some(pos) = end.update_by_offset(ele.partition(), ele.offset())? {
+                    info!("init reach end: partition {}, offset {:?}, end {}", ele.partition(), ele.offset(), pos);
+                }
+            }
         }
     }
 
@@ -471,13 +574,26 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
                 continue;
             }
 
-            if let Some(end) = &args.end {
-                if milli >= end.0 {
-                    info!("reach end: [{} >= {}]", format_milli(milli), format_milli(end.0));
+            // if let Some(end) = &args.end {
+            //     if milli >= end.0 {
+            //         info!("reach end: [{} >= {}]", format_milli(milli), format_milli(end.0));
+            //         break;
+            //     }
+            // }
+
+            if let Some(end) = &mut end_pos {
+                if let Some(pos) = end.update_by_msg(&borrowed_message)? {
+                    info!("update reach end: partition {}, offset {:?}, end {}", borrowed_message.partition(), borrowed_message.offset(), pos);
+                }
+
+                if end.is_all_end() {
+                    info!("reach all partition end");
                     break;
                 }
             }
 
+            // borrowed_message.partition();
+            // borrowed_message.offset();
             // process_ulink_msg(n+1, &borrowed_message, args, &mut stat)?;
             process_stat_msg(n+1, &borrowed_message, args, &mut stat)?;
             
