@@ -40,11 +40,12 @@ pub fn str_or_hex_line_write<W: std::fmt::Write, T: AsRef<[u8]>>(
     }
 
     if let Ok(s) = std::str::from_utf8(source) {
-        write!(f, "|str({})|{}|", source.len(), s)?;
-        if source.len() > 16 {
-            write!(f, "..")?;
-        }
-        write!(f, "|")
+        write!(f, "|str({})|{}|", source.len(), s)
+        // write!(f, "|str({})|{}|", source.len(), s)?;
+        // if source.len() > 16 {
+        //     write!(f, "..")?;
+        // }
+        // write!(f, "|")
     } else {
         hex_line_write(f, source, max_len)
     }
