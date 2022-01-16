@@ -1,33 +1,33 @@
 use std::borrow::Cow;
 
 use anyhow::{Result, Context, bail};
-use clap::Clap;
+use clap::Parser;
 use tracing::{info};
 
 use crate::token::a::{Input, gen_rand, gen_expired};
 
-#[derive(Clap, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub struct SubArgs {
     
-    #[clap(long = "secret", long_about = "secret")]
+    #[clap(long = "secret", long_help = "secret")]
     secret: Option<String>,
 
-    #[clap( long = "clientid", long_about = "clientid",)]
+    #[clap( long = "clientid", long_help = "clientid",)]
     clientid: Option<String>,
 
-    #[clap(long = "username", long_about = "username")]
+    #[clap(long = "username", long_help = "username")]
     username: Option<String>,
 
-    #[clap(long = "token", long_about = "token")]
+    #[clap(long = "token", long_help = "token")]
     token: Option<String>,
 
-    #[clap(long = "appid", long_about = "appid")]
+    #[clap(long = "appid", long_help = "appid")]
     appid: Option<String>,
 
-    #[clap(long = "rand", long_about = "random string")]
+    #[clap(long = "rand", long_help = "random string")]
     rand: Option<String>,
 
-    #[clap(long = "expired", long_about = "expired")]
+    #[clap(long = "expired", long_help = "expired")]
     expired: Option<u64>,
 }
 

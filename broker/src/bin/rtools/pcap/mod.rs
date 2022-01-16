@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use bytes::{Buf, BytesMut};
-use clap::{Clap, ValueHint};
+use clap::{Parser as ClapParser, ValueHint};
 use libpcap_analyzer::TransportLayerType;
 use log::{debug, info};
 
@@ -12,9 +12,9 @@ use tokio::io::AsyncReadExt;
 use tt::FixedHeader;
 use tt::PacketType;
 
-#[derive(Clap, Debug, Clone)]
+#[derive(ClapParser, Debug, Clone)]
 pub struct ReadMqttPcapArgs {
-    #[clap(short='f', long = "file", long_about = "pcap file. ", value_hint = ValueHint::FilePath,)]
+    #[clap(short='f', long = "file", long_help = "pcap file. ", value_hint = ValueHint::FilePath,)]
     file: String,
 }
 

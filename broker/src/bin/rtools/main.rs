@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::Clap;
+// use clap::Clap;
+use clap::{Parser, Subcommand};
 use rust_threeq::tq3;
 use rust_threeq::tq3::app;
 
@@ -11,14 +12,14 @@ mod util;
 mod token;
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
-#[derive(Clap, Debug)]
+#[derive(Parser, Debug)] 
 #[clap(name = "rthreeq tools", author, about, version=app::version_long())]
 struct CmdArgs {
     #[clap(subcommand)]
     cmd: SubCmd,
 }
 
-#[derive(Clap, Debug)]
+#[derive(Subcommand, Debug)]
 enum SubCmd {
     PulsarRead(pulsar::ReadArgs),
     KafkaRead(kafka::ReadArgs),

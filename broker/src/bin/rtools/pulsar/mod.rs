@@ -5,7 +5,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Local, TimeZone};
-use clap::{Clap, ValueHint};
+use clap::{Parser, ValueHint};
 use enumflags2::BitFlags;
 use futures::TryStreamExt;
 use log::{debug, info};
@@ -22,60 +22,60 @@ use self::pulsar_util::{Admin, EntryIndex, TopicParts};
 
 mod pulsar_util;
 
-#[derive(Clap, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub struct ReadArgs {
-    #[clap(long = "url", long_about = "pulsar broker url. ", default_value = "pulsar://127.0.0.1:6650", value_hint = ValueHint::Url,)]
+    #[clap(long = "url", long_help = "pulsar broker url. ", default_value = "pulsar://127.0.0.1:6650", value_hint = ValueHint::Url,)]
     url: String,
 
-    #[clap(long = "rest", long_about = "pulsar admin url. ", default_value = "http://127.0.0.1:8080", value_hint = ValueHint::Url,)]
+    #[clap(long = "rest", long_help = "pulsar admin url. ", default_value = "http://127.0.0.1:8080", value_hint = ValueHint::Url,)]
     rest: String,
 
     #[clap(
         long = "topic",
-        long_about = "pulsar topic, for example persistent://em/default/ev0",
-        multiple = true
+        long_help = "pulsar topic, for example persistent://em/default/ev0",
+        multiple_occurrences = true
     )]
     topics: Vec<String>,
 
     #[clap(
         long = "begin",
-        long_about = "optional, begin position to read from, one of formats:\n1. pulsar message id in format of {ledger_id}:{entry_id}\n2. time format, for example 2021-09-20T12:35:57"
+        long_help = "optional, begin position to read from, one of formats:\n1. pulsar message id in format of {ledger_id}:{entry_id}\n2. time format, for example 2021-09-20T12:35:57"
     )]
     begin: Option<PosBegin>,
 
-    #[clap(long = "num", long_about = "optional, max messages to read")]
+    #[clap(long = "num", long_help = "optional, max messages to read")]
     num: Option<u64>,
 
     #[clap(
         long = "end-time",
-        long_about = "optional, end position in time format, for example 2021-09-20T12:35:57"
+        long_help = "optional, end position in time format, for example 2021-09-20T12:35:57"
     )]
     end_time: Option<TimeArg>,
 
-    #[clap(long = "match-msgid", long_about = "optional, full match message id")]
+    #[clap(long = "match-msgid", long_help = "optional, full match message id")]
     match_msgid: Option<u64>,
 
     #[clap(
         long = "match-connid",
-        long_about = "optional, regex match connection id"
+        long_help = "optional, regex match connection id"
     )]
     match_connid: Option<u64>,
 
     #[clap(
         long = "match-clientid",
-        long_about = "optional, regex match client id"
+        long_help = "optional, regex match client id"
     )]
     match_clientid: Option<MatchClientId>,
 
-    #[clap(long = "match-user", long_about = "optional, regex match user name")]
+    #[clap(long = "match-user", long_help = "optional, regex match user name")]
     match_user: Option<RegexArg>,
 
-    #[clap(long = "match-topic", long_about = "optional, regex match topic")]
+    #[clap(long = "match-topic", long_help = "optional, regex match topic")]
     match_topic: Option<RegexArg>,
 
     #[clap(
         long = "match-pl-text",
-        long_about = "optional, regex match payload text"
+        long_help = "optional, regex match payload text"
     )]
     match_pl_text: Option<RegexArg>,
 }

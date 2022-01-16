@@ -20,7 +20,7 @@
 
 use super::config::*;
 use anyhow::{bail, Context, Result};
-use clap::Clap;
+use clap::Parser;
 use rust_threeq::{here, tq3::tt};
 use std::time::Duration;
 use tokio::time::timeout;
@@ -29,10 +29,10 @@ use tracing::{debug, error, info, instrument, Instrument, Span};
 // #[macro_use]
 // extern crate serde_derive;
 
-#[derive(Clap, Debug, Default)]
+#[derive(Parser, Debug, Default)]
 #[clap(name = "threeq verify", author, about, version)]
 struct CmdArgs {
-    #[clap(short = 'c', long = "config", long_about = "config file.")]
+    #[clap(short = 'c', long = "config", long_help = "config file.")]
     config: Option<String>,
 }
 

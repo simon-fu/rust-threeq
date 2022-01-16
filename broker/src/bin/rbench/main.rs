@@ -1,4 +1,4 @@
-use clap::Clap;
+use clap::Parser;
 use rust_threeq::tq3;
 use rust_threeq::tq3::app;
 use std::fmt::Debug;
@@ -9,7 +9,7 @@ mod mqtt;
 mod pulsar;
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
-#[derive(Clap, Debug)]
+#[derive(Parser, Debug)]
 #[clap(name = "rthreeq bench", author, about, version=app::version_long())]
 struct CmdArgs {
     //#[clap(arg_enum, short = 't', long = "type", long_about = "bench type", default_value = "mqtt")]
@@ -18,7 +18,7 @@ struct CmdArgs {
 }
 
 // #[derive(ArgEnum, Debug, PartialEq)]
-#[derive(Clap, Debug, PartialEq)]
+#[derive(Parser, Debug, PartialEq)]
 enum SubCmd {
     Mqtt(mqtt::Args),
     Pulsar(pulsar::Args),

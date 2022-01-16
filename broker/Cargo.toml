@@ -32,8 +32,11 @@ tokio-stream = { version = "^0.1.7", features = ["sync"] }
 bytes = "^1.0.1"
 tracing = { version = "=0.1.26", features = ["max_level_trace", "release_max_level_debug"] }
 tracing-subscriber = "=0.2.23"
-clap = "=3.0.0-beta.2"
-clap_derive="=3.0.0-beta.2"
+# clap = "=3.0.0-beta.2"
+# clap_derive="=3.0.0-beta.2"
+clap = { version = "3.0.7", features = ["derive"] }
+# clap_derive = "3.0.6"
+
 ntex-mqtt = "^0.6.9"
 mqttbytes="^0.4.0" 
 futures="^0.3.15"

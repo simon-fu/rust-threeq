@@ -13,7 +13,7 @@ TODO:
 
 use anyhow::{bail, Result};
 use bytes::{Bytes, BytesMut};
-use clap::Clap;
+use clap::Parser;
 use rust_threeq::tq3::app;
 use rust_threeq::tq3::{self, tbytes::PacketDecoder, tt};
 use std::convert::TryFrom;
@@ -62,33 +62,33 @@ fn call_malloc_trim() -> bool {
 }
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
-#[derive(Clap, Debug, Default)]
+#[derive(Parser, Debug, Default)]
 #[clap(name = "rthreeq broker", author, about, version=app::version_long())]
 struct Config {
     #[clap(
         short = 'l',
         long = "tcp-listen",
         default_value = "0.0.0.0:1883",
-        long_about = "tcp listen address."
+        long_help = "tcp listen address."
     )]
     tcp_listen_addr: String,
 
     #[clap(
         short = 'g',
         long = "enable_gc",
-        long_about = "enable memory garbage collection"
+        long_help = "enable memory garbage collection"
     )]
     enable_gc: bool,
 
-    #[clap(long = "node", long_about = "this node id", default_value = "0")]
+    #[clap(long = "node", long_help = "this node id", default_value = "0")]
     node_id: discovery::NodeId,
 
-    #[clap(long = "seed", long_about = "seed node address", default_value = " ")]
+    #[clap(long = "seed", long_help = "seed node address", default_value = " ")]
     seed: String,
 
     #[clap(
         long = "cluster-listen",
-        long_about = "cluster listen address",
+        long_help = "cluster listen address",
         default_value = "127.0.0.1:50051"
     )]
     cluster_listen_addr: String,

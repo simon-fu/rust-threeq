@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use bytes::Buf;
-use clap::Clap;
+use clap::Parser;
 use log::info;
 
 use rdkafka::{
@@ -19,50 +19,50 @@ use tracing::{debug, error};
 
 use crate::util::{MatchFlag, MatchPayloadText, MatchTopic, TimeArg};
 
-#[derive(Clap, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub struct ReadArgs {
-    #[clap(long = "topic", long_about = "topic to read")]
+    #[clap(long = "topic", long_help = "topic to read")]
     topic: String,
 
-    #[clap(long = "group", long_about = "kafka group", default_value = "rtools")]
+    #[clap(long = "group", long_help = "kafka group", default_value = "rtools")]
     group: String,
 
     #[clap(
         long = "addr",
-        long_about = "kafka address",
+        long_help = "kafka address",
         default_value = "127.0.0.1:9092"
     )]
     addr: String,
 
     #[clap(
         long = "begin",
-        long_about = "begin position time to read from",
+        long_help = "begin position time to read from",
         default_value = "2021-01-01T00:00:00"
     )]
     begin: TimeArg,
 
     #[clap(
         long = "end",
-        long_about = "end time",
+        long_help = "end time",
     )]
     end: Option<TimeArg>,
 
     #[clap(
         long = "num",
-        long_about = "num of messages to read",
+        long_help = "num of messages to read",
         default_value = "999999999"
     )]
     num: u64,
 
-    #[clap(long = "match-topic", long_about = "optional, regex match topic")]
+    #[clap(long = "match-topic", long_help = "optional, regex match topic")]
     match_topic: Option<MatchTopic>,
 
-    #[clap(long = "match-text", long_about = "optional, regex match payload text")]
+    #[clap(long = "match-text", long_help = "optional, regex match payload text")]
     match_text: Option<MatchPayloadText>,
 
     #[clap(
         long = "timeout",
-        long_about = "timeout in seconds",
+        long_help = "timeout in seconds",
         default_value = "10"
     )]
     timeout_sec: u64,

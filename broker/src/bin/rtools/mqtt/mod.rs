@@ -1,44 +1,44 @@
 use anyhow::{bail, Context, Result};
-use clap::Clap;
+use clap::Parser;
 use pretty_hex::PrettyHex;
 use rust_threeq::tq3::{hex::BinStrLine, tt};
 use tracing::{info, warn};
 
-#[derive(Clap, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub struct SubArgs {
     #[clap(
         long = "addr",
-        long_about = "broker address",
+        long_help = "broker address",
         default_value = "127.0.0.1:1883"
     )]
     addr: String,
 
-    #[clap(long = "user", long_about = "username")]
+    #[clap(long = "user", long_help = "username")]
     user: Option<String>,
 
-    #[clap(long = "password", long_about = "password")]
+    #[clap(long = "password", long_help = "password")]
     password: Option<String>,
 
-    #[clap(long = "clientid", long_about = "clientid")]
+    #[clap(long = "clientid", long_help = "clientid")]
     clientid: Option<String>,
 
     #[clap(
         long = "topic",
-        long_about = "subscribing topic, support multiple topic, for example t1/t2",
-        multiple = true
+        long_help = "subscribing topic, support multiple topic, for example t1/t2",
+        multiple_occurrences = true
     )]
     topics: Vec<String>,
 
     #[clap(
         long = "qos",
-        long_about = "subscribing QoS, for example QoS0",
+        long_help = "subscribing QoS, for example QoS0",
         default_value = "QoS1"
     )]
     qos: tt::QoS,
 
     #[clap(
         long = "ofmt",
-        long_about = "output format",
+        long_help = "output format",
         default_value = "plaintext"
     )]
     oformat: OFormat,
