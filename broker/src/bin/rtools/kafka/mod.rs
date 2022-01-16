@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use bytes::Buf;
-use clap::Parser;
+use clap::{Parser, ArgEnum};
 use log::info;
 
 use rdkafka::{
@@ -11,13 +11,19 @@ use rdkafka::{
 };
 use rust_threeq::tq3::{
     tbytes::PacketDecoder,
-    tt::{self, Protocol},
+    tt::{self, Protocol}, hex::BinStrLine,
 };
 use serde::{Serialize, Deserialize};
 use std::{time::Duration, collections::HashMap};
 use tracing::{debug, error};
 
 use crate::util::{MatchFlag, MatchPayloadText, MatchTopic, TimeArg};
+
+/*
+    cargo run --release --bin rtools kafka-read --addr ali-cn1-mqtt-kafka02:9092 --topic threeq-messages-metrics --begin "2022-01-13T00:00:00" --end "2022-01-14T00:00:00" > 2022-01-13.txt
+    cargo run --release --bin rtools kafka-read --addr 127.0.0.1:9092 --topic threeq-uplink-messages1 --begin 2022-01-14T14:46:18  --end 2022-01-14T20:28:35
+    cargo run --release --bin rtools kafka-read --addr 127.0.0.1:9092 --topic threeq-messages-metrics --begin 2022-01-14T14:46:18  --end 2022-01-14T20:28:35
+*/
 
 #[derive(Parser, Debug, Clone)]
 pub struct ReadArgs {
@@ -67,6 +73,19 @@ pub struct ReadArgs {
     )]
     timeout_sec: u64,
     
+    #[clap(
+        long = "data-format",
+        arg_enum,
+        // long_help = "timeout in seconds",
+        // default_value = "10"
+    )]
+    data_format: Option<DataFormat>,
+}
+
+#[derive(ArgEnum, Debug, Clone)]
+enum DataFormat {
+   Ulink, // threeq-uplink-messages1
+   Metrics, // threeq-messages-metrics
 }
 
 fn print_metadata(
@@ -275,115 +294,166 @@ struct ParsedMessage {
     code: Option<String>,
 }
 
+trait MessageHandler {
+    fn handle_message(&mut self, n: u64, msg: &BorrowedMessage) -> Result<()> ;
+    fn handle_finish(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
 
-fn process_ulink_msg(n: u64, msg: &BorrowedMessage, args: &ReadArgs, stat: &mut Stat) -> Result<()> {
-    // let msg = borrowed_message.detach();
-    // info!("msg {:?}", msg);
-    // let payload = msg.payload().unwrap();
-    let payload = msg.payload().with_context(||format!("No.{} empty payload", n))?;
-    let mut cursor = payload;
+struct DumpHandler {}
 
-    let ver = cursor.get_u8();
-    cursor.advance(2);
-    let etype = cursor.get_u8();
-    let etype = msg::Events::from_i32(etype as i32).with_context(||"decode event type fail")?;
+impl DumpHandler {
+    fn new(_args: &ReadArgs) -> Result<Self> {
+        Ok(Self {})
+    }
+}
 
-    let ts = {
-        let r = msg.timestamp().to_millis();
-        if let Some(n) = r {
-            format_milli(n as u64)
-        } else {
-            "None".into()
-        }
-    };
-
-    let mut kmsg = ParsedMessage {
-        n,
-        ts,
-        ver,
-        etype,
-        ..Default::default()
-    };
-
-    let mut flag = MatchFlag::default();
-
-    match etype {
-        msg::Events::Uplink => {
-            stat.num_uplinks += 1;
-            let m = <msg::UplinkMessage as prost::Message>::decode(cursor)?;
-            if let Some(header) = m.header {
-                kmsg.header = Some(ParsedHeader{header});
+impl MessageHandler for DumpHandler {
+    fn handle_message(&mut self, n: u64, msg: &BorrowedMessage) -> Result<()>  {
+        let payload = msg.payload().with_context(||format!("No.{} empty payload", n))?;
+        let ts = {
+            let r = msg.timestamp().to_millis();
+            if let Some(n) = r {
+                format_milli(n as u64)
+            } else {
+                "None".into()
             }
-            kmsg.code = Some(m.code);
-            let mut cursor = &m.packet[..];
-            let fixed_header = tt::check(cursor.iter(), 65536)?;
-            let packet = tt::Publish::decode(Protocol::from_u8(ver)?, &fixed_header, &mut cursor)?;
-            flag.match_text(&args.match_topic, &packet.topic);
-            flag.match_utf8(&args.match_text, packet.payload.to_vec());
-            kmsg.packet = Some(tt::Packet::Publish(packet));
-        },
-        msg::Events::Downlink => {
-            let _m = <msg::DownlinkMessage as prost::Message>::decode(cursor)?;
-        },
-        msg::Events::Subscription => {},
-        msg::Events::Unsubscription => {},
-        msg::Events::Connection => {},
-        msg::Events::Disconnection => {},
-        msg::Events::Close => {},
-        msg::Events::Malformed => {},
-    }
+        };
 
-    if !flag.is_empty() {
-        info!("-- No.{}: [{}], ver [{}], [{:?}], {:?}", n, kmsg.ts, ver, etype, flag.flags);
-        info!("{:?}", kmsg);
+        debug!("-- No.{}: ts [{}], parti [{}], offset [{}], payload [{}]", n, ts, msg.partition(), msg.offset(), payload.bin_str());
         info!("");
-    } else {
-        debug!("-- No.{}: [{}], ver [{}], [{:?}]", n, kmsg.ts, ver, etype);
-        debug!("{:?}", kmsg);
-        debug!("");
+
+        Ok(())
     }
-    
-
-    Ok(())
 }
 
-fn process_stat_msg(n: u64, msg: &BorrowedMessage, _args: &ReadArgs, stat: &mut Stat) -> Result<()> {
-    let payload = msg.payload().with_context(||format!("No.{} empty payload", n))?;
+struct UlinkHandler {
+    match_topic: Option<MatchTopic>,
+    match_text: Option<MatchPayloadText>,
+}
 
-    let ts = {
-        let r = msg.timestamp().to_millis();
-        if let Some(n) = r {
-            format_milli(n as u64)
-        } else {
-            "None".into()
+impl UlinkHandler {
+    fn new(args: &ReadArgs) -> Result<Self> {
+        Ok(Self {
+            match_topic: args.match_topic.clone(),
+            match_text: args.match_text.clone(),
+        })
+    }
+}
+
+impl MessageHandler for UlinkHandler {
+    fn handle_message(&mut self, n: u64, msg: &BorrowedMessage) -> Result<()>  {
+        // let msg = borrowed_message.detach();
+        // info!("msg {:?}", msg);
+        // let payload = msg.payload().unwrap();
+        let payload = msg.payload().with_context(||format!("No.{} empty payload", n))?;
+        let mut cursor = payload;
+
+        let ver = cursor.get_u8();
+        cursor.advance(2);
+        let etype = cursor.get_u8();
+        let etype = msg::Events::from_i32(etype as i32).with_context(||"decode event type fail")?;
+
+        let ts = {
+            let r = msg.timestamp().to_millis();
+            if let Some(n) = r {
+                format_milli(n as u64)
+            } else {
+                "None".into()
+            }
+        };
+
+        let mut kmsg = ParsedMessage {
+            n,
+            ts,
+            ver,
+            etype,
+            ..Default::default()
+        };
+
+        let mut flag = MatchFlag::default();
+
+        match etype {
+            msg::Events::Uplink => {
+                let m = <msg::UplinkMessage as prost::Message>::decode(cursor)?;
+                if let Some(header) = m.header {
+                    kmsg.header = Some(ParsedHeader{header});
+                }
+                kmsg.code = Some(m.code);
+                let mut cursor = &m.packet[..];
+                let fixed_header = tt::check(cursor.iter(), 65536)?;
+                let packet = tt::Publish::decode(Protocol::from_u8(ver)?, &fixed_header, &mut cursor)?;
+                flag.match_text(&self.match_topic, &packet.topic);
+                flag.match_utf8(&self.match_text, packet.payload.to_vec());
+                kmsg.packet = Some(tt::Packet::Publish(packet));
+            },
+            msg::Events::Downlink => {
+                let _m = <msg::DownlinkMessage as prost::Message>::decode(cursor)?;
+            },
+            msg::Events::Subscription => {},
+            msg::Events::Unsubscription => {},
+            msg::Events::Connection => {},
+            msg::Events::Disconnection => {},
+            msg::Events::Close => {},
+            msg::Events::Malformed => {},
         }
-    };
-    let s = std::str::from_utf8(payload)?;
-    debug!("-- No.{}: ts [{}], parti [{}], offset [{}]", n, ts, msg.partition(), msg.offset());
-    debug!("-- data: [{}]", s);
-    
-    let msg: StatMsg = serde_json::from_slice(payload).with_context(||"parse stat msg fail")?;
-    stat.add_app_delta(msg)?;
 
-    Ok(())
+        if !flag.is_empty() {
+            info!("-- No.{}: [{}], ver [{}], [{:?}], {:?}", n, kmsg.ts, ver, etype, flag.flags);
+            info!("{:?}", kmsg);
+            info!("");
+        } else {
+            debug!("-- No.{}: [{}], ver [{}], [{:?}]", n, kmsg.ts, ver, etype);
+            debug!("{:?}", kmsg);
+            debug!("");
+        }
+        
+
+        Ok(())        
+    }
 }
 
-// struct EndItem {
-//     end_offset: i64,
-//     is_reach_end: bool,
-// }
 
-// impl EndItem {
-//     fn update(&mut self, offset: i64) -> bool {
-//         if offset >= self.end_offset {
-//             if !self.is_reach_end {
-//                 self.is_reach_end = true;
-//                 return true;
-//             }
-//         }
-//         false
-//     }
-// }
+struct MetricsHandler {
+    stat: Stat
+}
+
+impl MetricsHandler {
+    fn new(_args: &ReadArgs) -> Result<Self> {
+        Ok(Self{stat: Stat::default()})
+    }
+}
+
+impl MessageHandler for MetricsHandler {
+    fn handle_message(&mut self, n: u64, msg: &BorrowedMessage) -> Result<()>  {
+        let payload = msg.payload().with_context(||format!("No.{} empty payload", n))?;
+
+        let ts = {
+            let r = msg.timestamp().to_millis();
+            if let Some(n) = r {
+                format_milli(n as u64)
+            } else {
+                "None".into()
+            }
+        };
+        let s = std::str::from_utf8(payload)?;
+        debug!("-- No.{}: ts [{}], parti [{}], offset [{}], data [{}]", n, ts, msg.partition(), msg.offset(), s);
+        
+        let msg: StatMsg = serde_json::from_slice(payload).with_context(||"parse stat msg fail")?;
+        self.stat.add_app_delta(msg)?;
+    
+        Ok(())        
+    }
+
+    fn handle_finish(&mut self) -> Result<()> {
+        let s = serde_json::to_string_pretty(&self.stat)?;
+        info!("--- app stats ---", );
+        info!("{}", s);
+        Ok(())
+    }
+}
+
 
 struct EndPos {
     // partition -> (offset, is_reach_end)
@@ -547,20 +617,16 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
 
     
     info!("");
-    // use std::str::FromStr;
-    // match &args.end {
-    //     Some(end) => {
-    //         if let Ok(num) = u64::from_str(end) {
-    //             return read_loop(&consumer, &args, &timeout, NumEndChecker{num});
-    //         }
 
-    //         let end: TimeArg = end.parse().with_context(||"invalid end arg")?;
-    //         return read_loop(&consumer, &args, &timeout, MilliEndChecker{milli: end.0});
-    //     },
-    //     None => return read_loop(&consumer, &args, &timeout, NumEndChecker{num: 1}),
-    // }
+    let mut handler: Box<dyn MessageHandler> = match &args.data_format {
+        Some(dformat) => match dformat {
+            DataFormat::Ulink => Box::new(UlinkHandler::new(&args)?),
+            DataFormat::Metrics => Box::new(MetricsHandler::new(&args)?),
+        },
+        None => Box::new(DumpHandler::new(&args)?),
+    };
 
-    let mut stat = Stat::default();
+    // let mut stat = Stat::default();
     let mut n = 0;
     while n < args.num {
         let r = consumer.poll(Timeout::After(timeout.clone()));
@@ -587,17 +653,12 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
 
             if let Some(end) = &args.end {
                 if milli >= end.0 {
-                    // info!("reach end: [{} >= {}]", format_milli(milli), format_milli(end.0));
-                    // break;
-                    info!("skip end: parti [{}], [{} >= {}]", borrowed_message.partition(), format_milli(milli), format_milli(end.0));
+                    debug!("skip end: parti [{}], [{} >= {}]", borrowed_message.partition(), format_milli(milli), format_milli(end.0));
                     continue;
                 }
             }
 
-            // borrowed_message.partition();
-            // borrowed_message.offset();
-            // process_ulink_msg(n+1, &borrowed_message, args, &mut stat)?;
-            process_stat_msg(n+1, &borrowed_message, args, &mut stat)?;
+            handler.handle_message(n+1, &borrowed_message)?;
             
             n += 1;
         } else {
@@ -606,8 +667,9 @@ pub async fn run_read(args: &ReadArgs) -> Result<()> {
         }
     }
 
-    let s = serde_json::to_string_pretty(&stat)?;
-    info!("--- app stats ---", );
-    info!("{}", s);
+    handler.handle_finish()?;
+    // let s = serde_json::to_string_pretty(&stat)?;
+    // info!("--- app stats ---", );
+    // info!("{}", s);
     Ok(())
 }
