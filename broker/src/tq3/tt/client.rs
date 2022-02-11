@@ -778,8 +778,11 @@ async fn task_entry(
                 let len = match r {
                     Ok(n) => n,
                     Err(e) => {
-                        debug!("read socket fail, {:?}", e);
-                        return Err(anyhow::Error::from(e))
+                        if session.state != State::Disconnecting {
+                            debug!("read socket fail, {:?}", e);
+                            return Err(anyhow::Error::from(e))
+                        }
+                        0
                     },
                 };
                 if len == 0 {
