@@ -285,10 +285,10 @@ impl std::fmt::Debug for ParsedHeader {
 
 #[derive(Debug, Default)]
 struct ParsedMessage {
-    n: u64,
+    _n: u64,
     ts: String,
-    ver: u8,
-    etype: msg::Events,
+    _ver: u8,
+    _etype: msg::Events,
     header: Option<ParsedHeader>,
     packet: Option<tt::Packet>,
     code: Option<String>,
@@ -365,10 +365,10 @@ impl MessageHandler for UlinkHandler {
         };
 
         let mut kmsg = ParsedMessage {
-            n,
+            _n: n,
             ts,
-            ver,
-            etype,
+            _ver: ver,
+            _etype: etype,
             ..Default::default()
         };
 

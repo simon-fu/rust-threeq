@@ -202,7 +202,7 @@ struct Session {
     disconnected: bool,
     topic_filters: HashSet<String>,
     // pub_topic_cache: HashMap<String, Arc<hub::Topic>>,
-    last_pub_topic: Option<hub::PubTopic>,
+    last_pub_topic: Option<hub::PubTopicGuard>,
 }
 
 const CONNECT_MAX_PACKET_SIZE: usize = 16 * 1024;

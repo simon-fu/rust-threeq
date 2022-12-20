@@ -47,25 +47,25 @@ impl PubTopicNode {
 }
 
 #[derive(Debug, Clone)]
-pub struct PubTopic {
+pub struct PubTopicGuard {
     hub: Hub,
     node: Arc<PubTopicNode>,
 }
 
-impl PubTopic {
+impl PubTopicGuard {
     fn new(hub: Hub, node: Arc<PubTopicNode>) -> Self {
         Self { hub, node }
     }
 }
 
-impl std::ops::Deref for PubTopic {
+impl std::ops::Deref for PubTopicGuard {
     type Target = PubTopicNode;
     fn deref(&self) -> &PubTopicNode {
         &self.node
     }
 }
 
-impl Drop for PubTopic {
+impl Drop for PubTopicGuard {
     fn drop(&mut self) {
         self.hub.release_pub_topic(&self.name);
     }
@@ -250,13 +250,13 @@ impl Hub {
         topics.len() > 0
     }
 
-    pub fn acquire_pub_topic<S: Into<String>>(&self, path: S) -> PubTopic {
+    pub fn acquire_pub_topic<S: Into<String>>(&self, path: S) -> PubTopicGuard {
         let path = path.into();
         {
             let hub = self.inner.read().unwrap();
             if let Some(node) = hub.topic_tree.get(&path) {
                 node.refc.fetch_add(1, Ordering::Relaxed);
-                return PubTopic::new(self.clone(), node.clone());
+                return PubTopicGuard::new(self.clone(), node.clone());
             }
         }
 
@@ -277,7 +277,7 @@ impl Hub {
 
             hub.topic_tree.entry(&node.name).get_or_insert(node.clone());
 
-            return PubTopic::new(self.clone(), node);
+            return PubTopicGuard::new(self.clone(), node);
         }
     }
 
@@ -381,7 +381,7 @@ pub mod bc_channel {
         let r = rx.recv().await;
         match r {
             Some(d) => Ok(d),
-            None => (Err(broadcast::error::RecvError::Closed)),
+            None => Err(broadcast::error::RecvError::Closed),
         }
     }
 
