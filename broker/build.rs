@@ -1,4 +1,10 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("cargo:rerun-if-changed=proto/helloworld.proto");
+    tonic_build::compile_protos("proto/helloworld.proto")?;
+    // tonic_build::configure()
+    // .file_descriptor_set_path(out_dir.join("helloworld_descriptor.bin"))
+    // .compile(&["proto/helloworld.proto"], &["proto"])?;
+
     // println!("cargo:rerun-if-changed=proto/service.proto");
     println!("cargo:rerun-if-changed=proto/zrpc.proto");
     println!("cargo:rerun-if-changed=proto/znodes.proto");
