@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package cluster.rpc;
+
+service Rpc {
+  rpc PrepareNode (PrepareNodeRequest) returns (PrepareNodeResponse) {}
+}
+
+message PrepareNodeRequest {
+  bool is_alloc_node_id = 1;
+  bool is_alloc_loopback_id = 2;
+  string request_addr = 3;
+}
+
+message PrepareNodeResponse {
+  optional string reflex_addr = 1;
+  optional uint64 loopback_id = 2;
+  optional uint64 node_id = 3;
+}
+
+
+
+

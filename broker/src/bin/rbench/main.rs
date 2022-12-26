@@ -29,10 +29,7 @@ enum SubCmd {
 async fn main() {
     tq3::log::tracing_subscriber::init();
 
-    // test_tonic::test_hello2().await.unwrap();
-    // helloworld_service().await;
-    // tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    // helloworld_client().await;
+    // test_tonic::test_hello().await.unwrap();
 
     let args = CmdArgs::parse();
 

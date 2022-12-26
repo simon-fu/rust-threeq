@@ -98,6 +98,9 @@ pcap-parser = "=0.13.0"
 libpcap-tools = { version="0.1.0", path="../libpcap-tools" }
 libpcap-analyzer = { version="0.1.0", path="../libpcap-analyzer", features = ["all"] }
 md5 = "0.7.0"
+dashmap = "=5.4.0"
+parking_lot = "=0.12.1"
+heapless = "=0.7.16"
 
 [dev-dependencies]
 # criterion = "^0.3.4"

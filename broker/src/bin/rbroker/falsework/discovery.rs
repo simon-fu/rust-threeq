@@ -2,10 +2,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use super::znodes::{
+use super::zrpc::znodes::{
     self, DeltaSyncReply, DeltaSyncRequest, FullSyncReply, FullSyncRequest, NodeInfo,
 };
-use super::zrpc;
+use super::zrpc::zrpc;
+use super::discovery;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, RwLock};
@@ -706,9 +707,8 @@ impl Service {
         }
     }
 
-    pub async fn kick_seed(&self, seed: &str) -> Result<(), Error> {
-        let seed = seed.trim();
-        if !seed.is_empty() {
+    pub async fn kick_seed(&self, seed: Option<&str>) -> Result<(), Error> {
+        if let Some(seed) = seed {
             self.service.inner().kick_seed(seed).await
         } else {
             Ok(())
@@ -768,3 +768,38 @@ impl Service {
 //         },
 //     }
 // }
+
+
+use anyhow::Result;
+pub async fn spawn_service(listen_addr: &str, seed: Option<&str>, node_id: NodeId) -> Result<()> {
+    let mut server = zrpc::Server::builder().build();
+        server.server_mut().bind(listen_addr).await?;
+        let local_addr = server.server().local_addr().unwrap();
+
+        let discovery = discovery::Service::new(&node_id, &local_addr);
+        discovery.kick_seed(seed).await?;
+
+        // server.add_service(service_sync_sub::build(&discovery).await?);
+        server.add_service(discovery.service());
+
+        let f = async move {
+            server.server().run().await;
+        };
+        let span = tracing::span!(tracing::Level::INFO, "cluster");
+        tokio::spawn(Instrument::instrument(f, span));
+        info!("cluster service at [{}], id [{}]", local_addr, node_id);
+
+        // let r = discovery::Service::launch(&cfg.node_id, &cfg.cluster_listen_addr, &cfg.seed).await;
+        // if let Err(e) = r {
+        //     return Err(Box::new(e));
+        // }
+        // let discovery = r.unwrap();
+        // info!(
+        //     "cluster service at [{}], id [{}]",
+        //     discovery.local_addr(),
+        //     discovery.id()
+        // );
+
+    Ok(())
+}
+
