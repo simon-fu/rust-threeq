@@ -47,7 +47,7 @@ where
                 request_addr: url.to_string(),
             })).await?;
             
-            info!("prepare with [{}] and response [{:?}]", url, rsp.get_ref());
+            debug!("prepare with [{}] and response [{:?}]", url, rsp.get_ref());
 
             if let Some(id) = rsp.get_ref().node_id {
                 opt_node_id = Some(id.into());

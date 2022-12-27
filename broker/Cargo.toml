@@ -30,8 +30,16 @@ path = "benches/criterion.rs"
 tokio = { version = "^1.8.1", features = ["full"] }
 tokio-stream = { version = "^0.1.7", features = ["sync"] }
 bytes = "^1.0.1"
-tracing = { version = "=0.1.26", features = ["max_level_trace", "release_max_level_debug"] }
-tracing-subscriber = "=0.2.23"
+
+# tracing = { version = "=0.1.26", features = ["max_level_trace", "release_max_level_debug"] }
+# tracing-subscriber = "=0.2.23"
+# ansi_term= "^0.12.1"
+tracing = { version = "=0.1.37", features = ["max_level_trace", "release_max_level_debug"] }
+tracing-subscriber = { version = "=0.3.16", features = ["env-filter", "fmt", "local-time", "time"]}
+tracing-appender = "=0.2.2"
+time = { version = "=0.3.17", features = ["macros", "local-offset"]}
+ansi_term = "=0.12.1"
+
 # clap = "=3.0.0-beta.2"
 # clap_derive="=3.0.0-beta.2"
 clap = { version = "3.0.7", features = ["derive"] }
@@ -42,7 +50,6 @@ mqttbytes="^0.4.0"
 futures="^0.3.15"
 pretty_assertions = "^0.7.2" # for tbytes
 num_enum = "^0.5.2"
-ansi_term= "^0.12.1"
 thiserror = "^1.0.26"
 config = { version = "^0.11.0", features = ["hjson"] }
 # config = "0.11.0"

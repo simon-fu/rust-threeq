@@ -50,7 +50,7 @@ async fn metrics() -> impl Responder {
 }
 
 async fn async_main() -> Result<()> {
-    tq3::log::tracing_subscriber::init();
+    // tq3::log::tracing_subscriber::init();
     // use tracing_subscriber::fmt::format::FmtSpan;
     // tq3::log::tracing_subscriber::init_with_span_events(FmtSpan::ACTIVE);
 
@@ -106,6 +106,9 @@ async fn async_main() -> Result<()> {
 // #[tokio::main]
 // #[actix_web::main]
 fn main() -> Result<()> {
+    // tq3::log::init_with_filters("debug,h2=warn,hyper=warn,tower=warn")?;
+    tq3::log::init()?;
+
     actix_web::rt::System::with_tokio_rt(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()

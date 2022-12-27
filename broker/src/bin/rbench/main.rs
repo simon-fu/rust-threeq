@@ -2,6 +2,7 @@ use clap::Parser;
 use rust_threeq::tq3;
 use rust_threeq::tq3::app;
 use std::fmt::Debug;
+use anyhow::Result;
 
 mod common;
 mod kafka;
@@ -26,8 +27,9 @@ enum SubCmd {
 }
 
 #[tokio::main]
-async fn main() {
-    tq3::log::tracing_subscriber::init();
+async fn main() -> Result<()> {
+    // tq3::log::tracing_subscriber::init();
+    tq3::log::init()?;
 
     // test_tonic::test_hello().await.unwrap();
 
@@ -38,6 +40,7 @@ async fn main() {
         SubCmd::Pulsar(opt) => pulsar::run(&opt).await,
         SubCmd::Kafka(opt) => kafka::run(&opt).await,
     }
+    Ok(())
 }
 
 // mod test_tonic {

@@ -380,7 +380,7 @@ mod tests {
     fn test_snowflake_id_normal() {
         // RUST_LOG=debug  cargo test test_snowflake_id -- --nocapture
 
-        super::log::init();
+        super::log::init().unwrap();
 
         const NODE_ID: u64 = 0x123;
         const MAX_ROUNDS: u64 = 10000;
@@ -462,7 +462,7 @@ mod tests {
     fn test_snowflake_id_borrow() {
         // RUST_LOG=debug  cargo test test_snowflake_id -- --nocapture
 
-        super::log::init();
+        super::log::init().unwrap();
         {
             // warm up
             let mut gen = SnowflakeId::new(111);
