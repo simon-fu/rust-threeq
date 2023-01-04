@@ -1,5 +1,6 @@
 /*
 TODO:
+- 优化 NodeIdPool 
 - support QoS1, Qos2, QoS match
 - support retain, and publish empty msg to clean retain
 - support cluster
@@ -106,8 +107,8 @@ async fn async_main() -> Result<()> {
 // #[tokio::main]
 // #[actix_web::main]
 fn main() -> Result<()> {
-    // tq3::log::init_with_filters("debug,h2=warn,hyper=warn,tower=warn")?;
-    tq3::log::init()?;
+    tq3::log::init_with_filters("debug,h2=warn,hyper=warn,tower=warn")?;
+    // tq3::log::init()?;
 
     actix_web::rt::System::with_tokio_rt(|| {
         tokio::runtime::Builder::new_multi_thread()

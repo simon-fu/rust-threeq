@@ -4,20 +4,143 @@ package cluster.rpc;
 
 service Rpc {
   rpc PrepareNode (PrepareNodeRequest) returns (PrepareNodeResponse) {}
+  rpc Meet (MeetRequest) returns (MeetResponse) {} 
+  rpc Ping (PingRequest) returns (PingResponse) {}
+  rpc SyncNode(stream NodeClientStream) returns (stream NodeServerStream) {}
+  // rpc SubscribeNode(SubscribeNodeRequest) returns (SubscribeNodeResponse) {}
 }
+
+// message SubscribeNodeRequest { 
+//   uint64 sync_id = 1;   // 同 ServerStreamHeaderPacket.sync_id
+//   uint64 offset = 2;   
+//   optional uint64 client_node_id = 3;  // 订阅方不是集群中的节点时等于空
+// }
+
+// message SubscribeNodeResponse { 
+//   uint64 sync_id = 1;
+// }
 
 message PrepareNodeRequest {
   bool is_alloc_node_id = 1;
   bool is_alloc_loopback_id = 2;
-  string request_addr = 3;
+  string server_addr = 3;
 }
 
 message PrepareNodeResponse {
-  optional string reflex_addr = 1;
-  optional uint64 loopback_id = 2;
-  optional uint64 node_id = 3;
+  oneof data {
+    NodeInfo redirect_node = 1;
+    PrepareNodeReply reply = 2;
+  }
 }
 
+message PrepareNodeReply {
+  optional string reflex_addr = 1;    // 服务端看到的客户端地址
+  optional uint64 loopback_id = 2;    // 服务端分配的 loopback_id
+  optional uint64 node_id = 3;        // 服务端分配的 node_id
+  repeated NodeInfo nodes = 4;        // 服务端知道的所有节点
+}
 
+message MeetRequest {
+  NodeInfo client_node = 1;     // 客户端的 node_id
+  string server_addr = 2;       // 服务端的地址
+  uint64 server_node_id = 3;    // 服务端的 node_id
+}
 
+message MeetResponse { 
+  repeated NodeInfo nodes = 1;
+}
+
+message PingRequest {
+  int64 ts_milli = 1;
+}
+
+message PingResponse { 
+  int64 ts_milli = 1;
+  int64 elapsed_milli = 2;
+  int64 origin_ts_milli = 3;
+}
+
+message NodeServerStream {
+  oneof data {
+    NodeSubscribeResponse subscribe_rsp = 1;
+    NodeStatePacket state = 2;
+    NodeDeltaPacket delta = 3;
+  }
+}
+
+message NodeClientStream {
+  oneof data {
+    NodeSubscribeRequest subscribe_req = 1;
+    // NodeStateAck state = 2;
+    // NodeDeltaAck delta = 3;
+  }
+}
+
+message NodeSubscribeRequest {
+  uint64 offset = 1;  // 指定 订阅 offset   
+  optional uint64 client_node_id = 3;  // 订阅方不是集群中的节点时等于空
+}
+
+message NodeSubscribeResponse {
+  uint64 sync_id = 1;     // 服务器分配的 id ， 唯一标识此次同步
+}
+
+message NodeStatePacket {
+  uint64 offset = 1;  // 此 state 生成时的 log 偏移， 从 1 开始，在此次 state 同步过程中不变
+  uint64 seq = 2;     // 此 state 包序号，从 0 开始
+  oneof state_data {
+    NodeInfo node = 10;
+    bool last = 11; // 此次 state 传输结束
+  }
+}
+
+message NodeDeltaPacket {
+  uint64 offset = 1;    // 事件 log 中的偏移，从 1 开始，每个包递增
+  int64 timestamp = 2; // 事件产生的时间
+  oneof delta_data {
+    NodeInfo update_node = 3;
+  }
+}
+
+// message NodeDeltaUpdateNode {
+//   NodeInfo node = 1;
+// }
+
+message NodeInfo {
+  uint64 node_id = 1;         // 节点 id，全局唯一
+  int64 uptime_milli = 2;     // 节点上线时间， 毫秒， uptime + node_id 唯一标识节点实例
+  repeated string addrs = 3;  // 节点 rpc 地址
+  uint64 offset = 4;          // 节点当前 log 偏移
+  NodeStatus status = 5;      // 节点当前状态
+}
+
+// message NodeDeltaAck {
+//   uint64 offset = 1;
+// }
+
+// message NodeStateAck {
+//   uint64 seq = 1;
+// }
+
+enum NodeStatus {
+  UNKNOWN = 0;        // 节点未知状态
+  Alone = 1;          // 节点独立运行
+  PrepareOnline = 2;  // 节点准备上线
+  Online = 3;         // 节点正常工作
+  Fault = 4;          // 节点故障
+  PrepareOffline = 5; // 节点准备下线
+  Offline = 6;        // 节点下线
+}
+
+message ReplyReason {
+  int32 code = 1;     // 错误码
+  string desc = 2;    // 错误描述
+}
+
+// message PrepareNodeResult {
+//   oneof reply_data {
+//     RpcReason error = 1;
+//     PrepareNodeResponse response = 2;
+//   }
+// }
 

@@ -712,22 +712,8 @@ impl Session {
 pub async fn run_server(cfg: &Config) -> Result<()> {
     info!("channel type: [{}]", hub::bc_channel_type_name());
 
-    let (cluster, _cluster_server) = cluster::bootstrap(cfg).await?;
+    let cluster = cluster::bootstrap(cfg).await?;
 
-    // let _cluster_server = if cfg.node_id > 0 {         
-    //     let cluster = Cluster::new(cfg.node_id.into());
-    //     let listen_url = cfg.cluster_listen_url().with_context(||"invalid cluster listen address")?;
-    //     let boostrap_url = cfg.boostrap_url().with_context(||"invalid boostrap address")?;
-    //     let server = cluster.bootstrap(&listen_url, &boostrap_url).await
-    //     .with_context(||"bootstrap fail")?;
-    //     info!("cluster rpc service at [{}]", listen_url.listen_url());
-    //     Some(server)
-    // } else {
-    //     info!("standalone mode");
-    //     None
-    // };
-
-    
     let reg = Registry {
         tenants: Default::default(),
     };
@@ -746,30 +732,9 @@ pub async fn run_server(cfg: &Config) -> Result<()> {
             .with_context(||format!("fail to bind mqtt tcp listen at [{}]", addr))?
         },
         None => { 
-            let addr = cfg.tcp_listen_addr_by_id(cluster.self_node().loopback_id());
+            let addr = cfg.tcp_listen_addr_by_id(cluster.loopback_id());
             TcpListener::bind(addr).await
             .with_context(||format!("fail to bind mqtt tcp listen at [{}]", addr))?
-
-            // let is_loopback = match &cluster_server {
-            //     Some(server) => server.listen_addr().ip().is_loopback(),
-            //     None => false,
-            // };
-
-            // if !is_loopback {
-            //     let addr = cfg.tcp_listen_addr_default();
-            //     TcpListener::bind(addr).await
-            //     .with_context(||format!("fail to bind mqtt tcp listen at [{}]", addr))?
-            // } else { 
-            //     let mut listener = None;
-            //     for addr in cfg.tcp_listen_addr_iter() {
-            //         let r = TcpListener::bind(addr).await;
-            //         if let Ok(r) = r {
-            //             listener = Some(r);
-            //             break;
-            //         }
-            //     }
-            //     listener.with_context(||"fail to listen mqtt tcp")?
-            // }
         },
     };
     info!("mqtt tcp service at [tcp://{:?}]", listener.local_addr()?);

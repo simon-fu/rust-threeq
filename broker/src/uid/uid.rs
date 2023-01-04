@@ -142,3 +142,15 @@ define_immutable_id!(NodeId);
 
 define_immutable_id!(ChId);
 
+define_immutable_id!(NodeOffset);
+
+/// 生成本地内存里唯一
+pub fn next_instance_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    lazy_static::lazy_static! {
+        static ref INST_ID: AtomicU64 = AtomicU64::new(1);
+    };
+    let inst_id = INST_ID.fetch_add(1, Ordering::Relaxed);
+    inst_id
+}

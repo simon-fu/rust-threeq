@@ -3,7 +3,7 @@ use std::net::{SocketAddr, Ipv4Addr, IpAddr};
 
 use clap::Parser;
 use lazy_static::lazy_static;
-use rust_threeq::{tq3::app, util::AddrUrl, cluster::ClusterConfig, uid::NodeId};
+use rust_threeq::{tq3::app, util::AddrUrl, cluster::{ClusterConfig, NodeIdPool}, uid::NodeId};
 use anyhow::Result;
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
@@ -37,6 +37,13 @@ pub struct Config {
         // default_value = "127.0.0.1:50051"
     )]
     pub cluster_listen_addr: Option<String>,
+
+    #[clap(
+        long = "node-pool",
+        long_help = "node id pool, eg. 1,50-90",
+        // default_value = "127.0.0.1:50051"
+    )]
+    pub node_id_pool: Option<NodeIdPool>,
 }
 
 impl Config {
@@ -70,7 +77,7 @@ impl Config {
     //     to_http_url(s)
     // }
 
-    // pub fn boostrap_url(&self) -> Result<Option<AddrUrl>> {
+    // pub fn bootstrap_url(&self) -> Result<Option<AddrUrl>> {
     //     match self.bootstrap.as_deref() {
     //         Some(s) => Ok(Some(to_http_url(s)?)),
     //         None => Ok(None),
@@ -152,14 +159,16 @@ impl ClusterConfig for Config {
         }
     }
 
-    fn cluster_boostrap_url(&self) -> Result<Option<AddrUrl>> {
+    fn cluster_bootstrap_url(&self) -> Result<Option<AddrUrl>> {
         match self.bootstrap.as_deref() {
             Some(s) => Ok(Some(to_http_url(s)?)),
             None => Ok(None),
         }
     }
 
-    
+    fn cluster_node_id_pool(&self) -> &Option<NodeIdPool> {
+        &self.node_id_pool
+    }
 }
 
 fn to_http_url(s: &str) -> Result<AddrUrl> {
