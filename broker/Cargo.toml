@@ -42,7 +42,7 @@ ansi_term = "=0.12.1"
 
 # clap = "=3.0.0-beta.2"
 # clap_derive="=3.0.0-beta.2"
-clap = { version = "3.0.7", features = ["derive"] }
+clap = { version = "~3.2", features = ["derive"] }
 # clap_derive = "3.0.6"
 
 ntex-mqtt = "^0.6.9"
@@ -97,7 +97,8 @@ anyhow = "1.0.43"
 rdkafka = "0.26.0"
 log = "0.4.14"
 pretty-hex = "0.2.1"
-enumflags2 = "=0.7.5"
+# enumflags2 = "=0.7.5"
+enumflags2 = "=0.7.7"
 built = "0.5.1"
 pcap-parser = "=0.13.0"
 # pcap = { version = "=0.9", features = ["capture-stream"] } 
@@ -110,6 +111,8 @@ parking_lot = "=0.12.1"
 heapless = "=0.7.16"
 event-listener = "=2.5.3"
 async-recursion = "1.0.0"
+# openraft = "0.7.3"
+openraft = { git = "https://github.com/datafuselabs/openraft.git", rev = "7b67f11", features = ["serde"]}
 
 [dev-dependencies]
 # criterion = "^0.3.4"

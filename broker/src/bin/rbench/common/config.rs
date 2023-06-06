@@ -56,13 +56,14 @@ impl config::Source for StringSource {
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct VarStr {
     buf: Vec<char>,
-    vars: Vec<(usize, usize)>,
+    vars: Vec<(usize, usize, u64)>,
 }
 
 impl<'t> VarStr {
     pub fn new(text: &str) -> Self {
         lazy_static::lazy_static! {
-            static ref VAR_STR_RE: Regex = Regex::new(r"\$R\{(?P<N>\d{1,})\}").unwrap();
+            // static ref VAR_STR_RE: Regex = Regex::new(r"\$R\{(?P<N>\d{1,})\}").unwrap();
+            static ref VAR_STR_RE: Regex = Regex::new(r"\$S\{(?P<N>\d{1,})\}").unwrap();
         }
 
         let text_vec: Vec<char> = text.chars().collect::<Vec<_>>();
@@ -82,7 +83,7 @@ impl<'t> VarStr {
             }
             src = c0.end();
 
-            self0.vars.push((self0.buf.len(), self0.buf.len() + n));
+            self0.vars.push((self0.buf.len(), self0.buf.len() + n, 0));
 
             for _i in 0..n {
                 self0.buf.push('0');
@@ -113,16 +114,16 @@ impl<'t> VarStr {
         self.vars.len()
     }
 
-    pub fn make<F, T>(&self, mut f: F) -> String
-    where
-        F: FnMut(&mut [char]) -> T,
-    {
-        let mut buf = self.buf.clone();
-        for v in &self.vars {
-            f(&mut buf[v.0..v.1]);
-        }
-        return buf.iter().collect::<String>();
-    }
+    // fn make<F, T>(&self, mut f: F) -> String
+    // where
+    //     F: FnMut(&mut [char]) -> T,
+    // {
+    //     let mut buf = self.buf.clone();
+    //     for v in &self.vars {
+    //         f(&mut buf[v.0..v.1]);
+    //     }
+    //     return buf.iter().collect::<String>();
+    // }
 
     // pub fn random(&self) -> String {
     //     let mut iter =
@@ -136,17 +137,42 @@ impl<'t> VarStr {
     //     });
     // }
 
-    pub fn random(&self) -> String {
+    pub fn random(&mut self) -> String {
         self.random_with(&mut rand::thread_rng())
     }
 
-    pub fn random_with<R: rand::Rng>(&self, random: &mut R) -> String {
-        return self.make(|s| {
-            for v in s {
-                let r = random.sample(&rand::distributions::Alphanumeric);
-                *v = char::from(r);
+    // pub fn random_with<R: rand::Rng>(&self, random: &mut R) -> String {
+    //     return self.make(|s| {
+    //         for v in s {
+    //             let r = random.sample(&rand::distributions::Alphanumeric);
+    //             *v = char::from(r);
+    //         }
+    //     });
+    // }
+
+    pub fn random_with<R: rand::Rng>(&mut self, _random: &mut R) -> String {
+
+        let mut buf = self.buf.clone();
+        for v in &mut self.vars {
+            v.2 += 1;
+            let src = v.2.to_string();
+            let mut src = src.chars().rev();
+            let dst = &mut buf[v.0..v.1];
+            let mut dst = dst.iter_mut().rev();
+
+            while let Some(s) = src.next() {
+                if let Some(d) = dst.next() {
+                    *d = s;
+                } else {
+                    break;
+                }
             }
-        });
+
+            while let Some(d) = dst.next() {
+                *d = '0';
+            }
+        }
+        return buf.iter().collect::<String>();
     }
 
     // pub fn fill(&self, c: char) -> String {
@@ -184,8 +210,8 @@ pub fn make_pubsub_topics(
     };
     let random = &mut random_;
 
-    let pubv = VarStr::new(pub_topic);
-    let subv = VarStr::new(sub_topic);
+    let mut pubv = VarStr::new(pub_topic);
+    let mut subv = VarStr::new(sub_topic);
 
     let mut pub_topics: Vec<(u64, String)> = Vec::new();
     let mut sub_topics: Vec<String> = Vec::new();
