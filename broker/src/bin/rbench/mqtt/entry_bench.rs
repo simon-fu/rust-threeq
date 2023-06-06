@@ -242,6 +242,14 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<()> {
     info!("topic rule: {}", desc);
     info!("pub inflights: {}", cfgw.raw().pubs.inflights);
 
+    // for t in pub_topics.iter() {
+    //     tracing::debug!("pub topic: [{:?}]", t);
+    // }
+
+    // for t in sub_topics.iter() {
+    //     tracing::debug!("sub topic: [{}]", t);
+    // }
+
     if sub_topics.len() > 0 {
         let _r = bencher
             .launch_sub_sessions(
@@ -251,6 +259,8 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<()> {
                 cfgw.raw().subs.conn_per_sec,
                 |_n| {
                     let acc = accounts.next().unwrap();
+                    // tracing::debug!("sub client_id: [{:?}]", acc.client_id);
+
                     Suber {
                         cfg: cfgw.clone(),
                         acc,
@@ -280,6 +290,8 @@ pub async fn bench_all(cfgw: Arc<app::Config>) -> Result<()> {
                 args,
                 |_n| {
                     let acc = accounts.next().unwrap();
+                    // tracing::debug!("pub client_id: [{:?}]", acc.client_id);
+
                     let item = pub_topics.pop().unwrap();
                     let o = Puber {
                         cfg: cfgw.clone(),

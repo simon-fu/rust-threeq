@@ -171,7 +171,7 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use tracing::metadata::LevelFilter;
-use tracing_subscriber::{EnvFilter, fmt::{self, time::{OffsetTime, Uptime}}, prelude::*, filter::Directive};
+use tracing_subscriber::{EnvFilter, fmt::{self, time::{Uptime, LocalTime}}, prelude::*, filter::Directive};
 use time::macros::format_description;
 
 pub fn init() -> Result<()> {
@@ -217,13 +217,18 @@ pub fn init_with_filters(dirs: &str) -> Result<()> {
     // // see https://time-rs.github.io/book/api/format-description.html
     // let timer = LocalTime::new(format_description!("[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"));
 
-    // 当在多线程环境下会返回失败
-    let offset = time::UtcOffset::current_local_offset()?;
+    // // 当在多线程环境下会返回失败
+    // let offset = time::UtcOffset::current_local_offset()?;
+
+    // // see https://time-rs.github.io/book/api/format-description.html
+    // let timer = OffsetTime::new(offset, format_description!("[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"));
 
     // see https://time-rs.github.io/book/api/format-description.html
-    let timer = OffsetTime::new(offset, format_description!("[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"));
-    
-    
+    let timer = LocalTime::new(format_description!("[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"));
+    // let timer = tracing_subscriber::fmt::time::LocalTime::new(
+    //     format_description!("[month]-[day]T[hour]:[minute]:[second]")
+    // );
+
     let layer = fmt::layer()
     .with_target(false)
     .with_timer(timer);

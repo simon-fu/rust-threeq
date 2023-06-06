@@ -199,10 +199,10 @@ impl Hub {
         hub.sessions_by_uid.remove(&SessionByUid(session.clone()));
     }
 
-    pub fn num_sessions(&self) -> usize {
-        let hub = self.inner.read().unwrap();
-        hub.sessions_by_uid.len()
-    }
+    // pub fn num_sessions(&self) -> usize {
+    //     let hub = self.inner.read().unwrap();
+    //     hub.sessions_by_uid.len()
+    // }
 
     fn subscribe0(&self, filter: &str, uid: u64, tx: BcSender) -> Vec<Arc<PubTopicNode>> {
         let mut hub = self.inner.write().unwrap();

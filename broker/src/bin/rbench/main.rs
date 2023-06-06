@@ -5,9 +5,9 @@ use std::fmt::Debug;
 use anyhow::Result;
 
 mod common;
-mod kafka;
+// mod kafka;
 mod mqtt;
-mod pulsar;
+// mod pulsar;
 
 // refer https://github.com/clap-rs/clap/tree/master/clap_derive/examples
 #[derive(Parser, Debug)]
@@ -22,8 +22,8 @@ struct CmdArgs {
 #[derive(Parser, Debug, PartialEq)]
 enum SubCmd {
     Mqtt(mqtt::Args),
-    Pulsar(pulsar::Args),
-    Kafka(kafka::Args),
+    // Pulsar(pulsar::Args),
+    // Kafka(kafka::Args),
 }
 
 #[tokio::main]
@@ -37,8 +37,8 @@ async fn main() -> Result<()> {
 
     match args.cmd {
         SubCmd::Mqtt(opt) => mqtt::run(&opt).await,
-        SubCmd::Pulsar(opt) => pulsar::run(&opt).await,
-        SubCmd::Kafka(opt) => kafka::run(&opt).await,
+        // SubCmd::Pulsar(opt) => pulsar::run(&opt).await,
+        // SubCmd::Kafka(opt) => kafka::run(&opt).await,
     }
     Ok(())
 }

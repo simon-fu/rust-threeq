@@ -16,8 +16,8 @@ TODO:
 use clap::Parser;
 use rust_threeq::tq3;
 use tracing::{error, info};
-use actix_web::{get, HttpResponse, Responder};
-use prometheus::{Encoder, TextEncoder};
+// use actix_web::{get, HttpResponse, Responder};
+// use prometheus::{Encoder, TextEncoder};
 use anyhow::Result;
 use crate::args::Config;
 
@@ -37,18 +37,18 @@ lazy_static::lazy_static! {
         prometheus::register_int_gauge!("sessions", "Number of sessions").unwrap();
 }
 
-#[get("/metrics")]
-async fn metrics() -> impl Responder {
-    SESSION_GAUGE.set(hub::get().num_sessions() as i64);
-    let metric_families = prometheus::gather();
+// #[get("/metrics")]
+// async fn metrics() -> impl Responder {
+//     SESSION_GAUGE.set(hub::get().num_sessions() as i64);
+//     let metric_families = prometheus::gather();
 
-    let mut buffer = Vec::new();
-    let encoder = TextEncoder::new();
-    encoder.encode(&metric_families, &mut buffer).unwrap();
-    let output = String::from_utf8(buffer).unwrap();
-    // debug!("{}", output);
-    HttpResponse::Ok().body(output)
-}
+//     let mut buffer = Vec::new();
+//     let encoder = TextEncoder::new();
+//     encoder.encode(&metric_families, &mut buffer).unwrap();
+//     let output = String::from_utf8(buffer).unwrap();
+//     // debug!("{}", output);
+//     HttpResponse::Ok().body(output)
+// }
 
 async fn async_main() -> Result<()> {
     // tq3::log::tracing_subscriber::init();
@@ -104,21 +104,29 @@ async fn async_main() -> Result<()> {
     // Ok(())
 }
 
-// #[tokio::main]
-// #[actix_web::main]
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     tq3::log::init_with_filters("debug,h2=warn,hyper=warn,tower=warn")?;
     // tq3::log::init()?;
-
-    actix_web::rt::System::with_tokio_rt(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            // .worker_threads(8)
-            .thread_name("main-tokio")
-            .build()
-            .unwrap()
-    })
-    .block_on(async_main())?;
-
-    Ok(())
+    async_main().await
 }
+
+// // #[tokio::main]
+// // #[actix_web::main]
+// fn main() -> Result<()> {
+//     tq3::log::init_with_filters("debug,h2=warn,hyper=warn,tower=warn")?;
+//     // tq3::log::init()?;
+
+//     actix_web::rt::System::with_tokio_rt(|| {
+//         tokio::runtime::Builder::new_multi_thread()
+//             .enable_all()
+//             // .worker_threads(8)
+//             .thread_name("main-tokio")
+//             .build()
+//             .unwrap()
+//     })
+//     .block_on(async_main())?;
+
+
+//     Ok(())
+// }
