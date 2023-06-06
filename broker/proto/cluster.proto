@@ -108,10 +108,11 @@ message NodeDeltaPacket {
 
 message NodeInfo {
   uint64 node_id = 1;         // 节点 id，全局唯一
-  int64 uptime_milli = 2;     // 节点上线时间， 毫秒， uptime + node_id 唯一标识节点实例
-  repeated string addrs = 3;  // 节点 rpc 地址
-  uint64 offset = 4;          // 节点当前 log 偏移
-  NodeStatus status = 5;      // 节点当前状态
+  uint64 install_id = 2;      // 节点第一次运行时生成， 用于判断 node_id 是否重复， node_id + install_id 唯一标识一个节点
+  int64 uptime_milli = 3;     // 节点上线时间， 毫秒， node_id + install_id + uptime  唯一标识节点实例
+  repeated string addrs = 4;  // 节点 rpc 地址
+  uint64 offset = 5;          // 节点当前 log 偏移
+  NodeStatus status = 6;      // 节点当前状态
 }
 
 // message NodeDeltaAck {
