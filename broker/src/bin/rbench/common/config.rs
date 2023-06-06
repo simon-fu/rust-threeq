@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-
+use anyhow::{Result, anyhow};
+use nom::{IResult, bytes::complete::{take_while, tag}, character::complete::space0};
 use rand::SeedableRng;
-use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub fn bool_true() -> bool {
@@ -53,49 +53,68 @@ impl config::Source for StringSource {
     }
 }
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+
+
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct VarStr {
     buf: Vec<char>,
-    vars: Vec<(usize, usize, u64)>,
+    vars: Vec<Var>,
 }
 
 impl<'t> VarStr {
     pub fn new(text: &str) -> Self {
-        lazy_static::lazy_static! {
-            // static ref VAR_STR_RE: Regex = Regex::new(r"\$R\{(?P<N>\d{1,})\}").unwrap();
-            static ref VAR_STR_RE: Regex = Regex::new(r"\$S\{(?P<N>\d{1,})\}").unwrap();
+        let r = parse_var_full(text);
+        match r {
+            Ok(s) => s,
+            Err(_e) => Self { 
+                buf: text.chars().collect::<Vec<_>>(), 
+                vars: Vec::new(),
+            },
         }
-
-        let text_vec: Vec<char> = text.chars().collect::<Vec<_>>();
-        let mut self0 = Self {
-            buf: Vec::new(),
-            vars: Vec::new(),
-        };
-        let mut src = 0;
-
-        for cap in VAR_STR_RE.captures_iter(text) {
-            let c0 = cap.get(0).unwrap();
-            let c1 = cap.get(1).unwrap();
-            let n = c1.as_str().parse::<usize>().unwrap();
-            while src < c0.start() {
-                self0.buf.push(text_vec[src]);
-                src += 1;
-            }
-            src = c0.end();
-
-            self0.vars.push((self0.buf.len(), self0.buf.len() + n, 0));
-
-            for _i in 0..n {
-                self0.buf.push('0');
-            }
-        }
-        while src < text_vec.len() {
-            self0.buf.push(text_vec[src]);
-            src += 1;
-        }
-
-        return self0;
     }
+
+    // pub fn new(text: &str) -> Self {
+    //     lazy_static::lazy_static! {
+    //         // static ref VAR_STR_RE: Regex = Regex::new(r"\$R\{(?P<N>\d{1,})\}").unwrap();
+    //         static ref VAR_STR_RE: Regex = Regex::new(r"\$S\{(?P<N>\d{1,})\}").unwrap();
+    //     }
+
+    //     let text_vec: Vec<char> = text.chars().collect::<Vec<_>>();
+    //     let mut self0 = Self {
+    //         buf: Vec::new(),
+    //         vars: Vec::new(),
+    //     };
+    //     let mut src = 0;
+
+    //     for cap in VAR_STR_RE.captures_iter(text) {
+    //         let c0 = cap.get(0).unwrap();
+    //         let c1 = cap.get(1).unwrap();
+    //         let n = c1.as_str().parse::<usize>().unwrap();
+    //         while src < c0.start() {
+    //             self0.buf.push(text_vec[src]);
+    //             src += 1;
+    //         }
+    //         src = c0.end();
+
+    //         // self0.vars.push((self0.buf.len(), self0.buf.len() + n, 0));
+    //         self0.vars.push(Var { 
+    //             begin: self0.buf.len(), 
+    //             end: self0.buf.len() + n, 
+    //             seq: None,
+    //         });
+
+    //         for _i in 0..n {
+    //             self0.buf.push('0');
+    //         }
+    //     }
+    //     while src < text_vec.len() {
+    //         self0.buf.push(text_vec[src]);
+    //         src += 1;
+    //     }
+
+    //     return self0;
+    // }
 
     // pub fn new_option(text: &str) -> Option<Self> {
     //     let v = Self::new(text);
@@ -150,27 +169,39 @@ impl<'t> VarStr {
     //     });
     // }
 
-    pub fn random_with<R: rand::Rng>(&mut self, _random: &mut R) -> String {
+    pub fn random_with<R: rand::Rng>(&mut self, random: &mut R) -> String {
 
         let mut buf = self.buf.clone();
         for v in &mut self.vars {
-            v.2 += 1;
-            let src = v.2.to_string();
-            let mut src = src.chars().rev();
-            let dst = &mut buf[v.0..v.1];
-            let mut dst = dst.iter_mut().rev();
-
-            while let Some(s) = src.next() {
-                if let Some(d) = dst.next() {
-                    *d = s;
-                } else {
-                    break;
-                }
+            match &mut v.seq {
+                Some(seq) => {
+                    *seq += 1;
+                    let src = seq.to_string();
+                    let mut src = src.chars().rev();
+                    let dst = &mut buf[v.begin..v.end];
+                    let mut dst = dst.iter_mut().rev();
+        
+                    while let Some(s) = src.next() {
+                        if let Some(d) = dst.next() {
+                            *d = s;
+                        } else {
+                            break;
+                        }
+                    }
+        
+                    while let Some(d) = dst.next() {
+                        *d = '0';
+                    }
+                },
+                None => {
+                    let dst = &mut buf[v.begin..v.end];
+                    for d in dst.iter_mut() {
+                        let r = random.sample(&rand::distributions::Alphanumeric);
+                        *d = char::from(r);
+                    }                    
+                },
             }
-
-            while let Some(d) = dst.next() {
-                *d = '0';
-            }
+            
         }
         return buf.iter().collect::<String>();
     }
@@ -196,6 +227,131 @@ impl<'t> VarStr {
     //     });
     // }
 }
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
+struct Var {
+    begin: usize,
+    end: usize,
+    seq: Option<u64>,
+}
+
+fn parse_var_full(text: &str) -> Result<VarStr> {
+    let mut self0 = VarStr {
+        buf: Vec::new(),
+        vars: Vec::new(),
+    };
+
+    let mut input = text;
+    while !input.is_empty() {
+        {
+            let s;
+            (input, s) = take_until_dollar(input).map_err(|e|anyhow::anyhow!("{:?}", e))?;
+            self0.buf.extend(s.chars());
+        }
+        
+        if !input.is_empty() {
+            let mut m;
+            (input, m) = take_dollar_type(input).map_err(|e|anyhow::anyhow!("{:?}", e))?;
+
+            while m == "$" {
+                self0.buf.push('$');
+                (input, m) = take_m(input, 1).map_err(|e|anyhow::anyhow!("{:?}", e))?;
+            }
+
+            if m == "R" {
+                let v;
+                (input, v) = parse_to_var(input, &mut self0.buf)?;
+                self0.vars.push(v);
+            } else if m == "S" {
+                let mut v;
+                (input, v) = parse_to_var(input, &mut self0.buf)?;
+                v.seq = Some(0);
+                self0.vars.push(v);
+            } else {
+                self0.buf.push('$');
+                self0.buf.extend(m.chars());
+            }
+        }
+    }
+    Ok(self0)
+}
+
+
+fn take_m(input: &str, num: usize) -> IResult<&str, &str> {
+    let n_remainings = std::cell::Cell::new(num);
+
+    take_while(move |_c| {
+        if n_remainings.get() == 0 {
+            false
+        } else {
+            n_remainings.set(n_remainings.get() - 1);
+            true
+        }
+    })(input)    
+}
+
+fn take_dollar_type(mut input: &str) -> IResult<&str, &str> {
+    (input, _) = tag("$")(input)?;
+    take_m(input, 1)
+}
+
+fn take_until_dollar(input: &str) -> IResult<&str, &str> {
+    take_while(|c| {
+        c != '$'
+    })(input)
+}
+
+
+fn parse_to_var<'a>(mut input: &'a str, buf: &mut Vec<char>) -> Result<(&'a str, Var)> {
+    let n;
+    (input, n) = parse_to_var2(input).map_err(|e|anyhow!("{:?}", e))?;
+    buf.extend((0..n).map(|_x|'0'));
+    Ok((input, Var {
+        begin: buf.len()-n,
+        end: buf.len(),
+        seq: None,
+    }))
+}
+
+fn parse_to_var2(mut input: &str) -> IResult<&str, usize> {
+    let s;
+    (input, s) = parse_to_var_expr(input)?;
+
+    let v: usize = s.parse().map_err(|_e|nom::Err::Error(nom::error::Error::new(s, nom::error::ErrorKind::Digit)))?;
+    
+    Ok((input, v))
+}
+
+fn parse_to_var_expr(mut input: &str) -> IResult<&str, &str> {
+    (input, _) = space0(input)?;
+    (input, _) = tag("{")(input)?;
+
+    let s;
+    (input, s) = take_while(|c| {
+        c != '}'
+    })(input)?;
+
+    if !input.is_empty() {
+        (input, _) = tag("}")(input)?;
+    }
+
+    Ok((input, s))
+}
+
+// fn take_until_left_brace(mut input: &str) -> IResult<&str, &str> {
+//     let mut name;
+//     (input, name) = take_until_delimiters(input, &['{', ','])?;
+//     name = name.trim();
+//     Ok((input, name))
+// }
+
+// #[inline]
+// fn take_until_delimiters<'a>(input: &'a str, delimiters: &[char]) -> IResult<&'a str, &'a str> {
+//     take_while(|c| {
+//         delimiters.iter().position(|x|*x == c).is_none()
+//     })(input)
+// }
+
 
 pub fn make_pubsub_topics(
     pub_n: u64,
@@ -255,3 +411,17 @@ pub fn make_pubsub_topics(
         )
     }
 }
+
+
+// #[cfg(test)]
+// mod test {
+//     use super::{VarStr};
+
+//     #[test]
+//     fn test_parse_var() {
+//         println!("{:?}", VarStr::new("abc"));
+//         println!("{:?}", VarStr::new("abc$R"));
+//         println!("{:?}", VarStr::new("abc$R{3}"));
+//         println!("{:?}", VarStr::new("abc$$R{3}"));
+//     }
+// }
